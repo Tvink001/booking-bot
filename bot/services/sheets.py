@@ -65,6 +65,21 @@ class SheetsService:
         rows = await asyncio.to_thread(self._ws_masters.get_all_records, head=1)
         return [Master.from_row(r) for r in rows if r.get("id")]
 
+    async def load_all_blackouts(self) -> list[Blackout]:
+        """Load every blackout row. Used by the 14-day date keyboard
+        to avoid 14 round-trips. The blackouts tab is small (holidays
+        and vacations) so a full read is cheap."""
+        rows = await asyncio.to_thread(self._ws_blackouts.get_all_records, head=1)
+        out: list[Blackout] = []
+        for r in rows:
+            if not r.get("master_id"):
+                continue
+            try:
+                out.append(Blackout.from_row(r))
+            except (KeyError, ValueError) as e:
+                logger.warning("Skipping malformed blackout row: %s", e)
+        return out
+
     async def load_blackouts_for_date(self, d: date) -> list[Blackout]:
         rows = await asyncio.to_thread(self._ws_blackouts.get_all_records, head=1)
         target_iso = d.isoformat()

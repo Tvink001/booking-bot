@@ -17,8 +17,11 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from aiohttp import web
 
 from bot.config import settings
+from bot.handlers.booking import booking_router
 from bot.handlers.start import start_router
+from bot.services.calendar import CalendarService
 from bot.services.scheduler import scheduler
+from bot.services.sheets import SheetsService
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +37,12 @@ def _build_bot() -> Bot:
 
 def _build_dispatcher() -> Dispatcher:
     dp = Dispatcher(storage=MemoryStorage())
+    # Workflow-data DI: handlers that declare `sheets: SheetsService` or
+    # `calendar: CalendarService` parameters receive these singletons.
+    dp["sheets"] = SheetsService()
+    dp["calendar"] = CalendarService()
     dp.include_router(start_router)
+    dp.include_router(booking_router)
     dp.startup.register(_on_startup)
     dp.shutdown.register(_on_shutdown)
     return dp

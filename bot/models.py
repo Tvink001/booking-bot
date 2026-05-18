@@ -24,6 +24,19 @@ def _csv_strs(v: Any) -> list[str]:
 
 
 def _csv_ints(v: Any) -> list[int]:
+    """Parse CSV ints, with fallback for Google Sheets locale quirk.
+
+    Google Sheets with comma-as-thousands-separator locale interprets a
+    text-typed cell `"1,2,3,4,5,6"` as the number 123456 — gspread then
+    returns int, not str. If we see an int whose digits are all in [1,7],
+    treat it as concatenated weekdays. Otherwise fall through to the
+    normal CSV-string parse.
+    """
+    if isinstance(v, int) and not isinstance(v, bool):
+        digits = str(v)
+        if digits.isdigit() and all(c in "1234567" for c in digits):
+            return [int(c) for c in digits]
+        return []
     return [int(x) for x in _csv_strs(v)]
 
 

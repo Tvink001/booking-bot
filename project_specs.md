@@ -941,16 +941,85 @@ Both created as module-scope stubs returning early with a TODO log. Required to 
 
 ---
 
-# 11. Booking FSM Flow [TBD via Prompt 4]
+# 11. Booking FSM Flow [filled, Prompt 4]
 
-To be filled during Prompt 4. The flow follows the states defined in section 8 above. The spec captures: exact text shown to the user at each step, exact keyboard layout, how errors at each step are handled (e.g. user types when a button is expected, user picks an already-occupied slot due to race), and exact data shape written to `FSMContext` at each step.
+## 11.1 State transitions
+
+Six states (`bot.states.Booking`), driven by callback_query handlers in `bot/handlers/booking.py`. Each forward transition writes to `FSMContext`; back transitions selectively drop keys to allow re-edit without losing earlier choices.
+
+| From state | Trigger | To state | FSM data after |
+|---|---|---|---|
+| `None` (main menu) | Reply text `"📅 Записатися"` | `choosing_service` | `{}` |
+| `choosing_service` | `ServiceCB(service_id=X)` (1 master eligible) | `choosing_date` | `{service_id, master_id}` |
+| `choosing_service` | `ServiceCB(service_id=X)` (2+ masters) | `choosing_master` | `{service_id}` |
+| `choosing_master` | `MasterCB(master_id=Y)` | `choosing_date` | `{service_id, master_id}` |
+| `choosing_date` | `DateCB(iso_date=…)` | `choosing_slot` | `{service_id, master_id, iso_date}` |
+| `choosing_slot` | `SlotCB(time_hhmm=N)` | `entering_contact` | `{service_id, master_id, iso_date, iso_datetime}` |
+| `entering_contact` (sub-step 1) | text message, `client_name` ∉ data | `entering_contact` | `+ client_name` |
+| `entering_contact` (sub-step 2) | text message or `F.contact` | `confirming` (via `_show_confirmation`) | `+ client_phone` |
+| `confirming` | `NavCB(action="confirm")` race-passes | `None` (cleared) | atomic write done; FSM cleared |
+| `confirming` | `NavCB(action="confirm")` race-fails | `choosing_slot` | `{...} - iso_datetime` (and slot kb re-rendered) |
+| any | `NavCB(action="cancel")` or `/cancel` | `None` | `{}` |
+| any | `NavCB(action="back")` | previous state | selected keys dropped (table below) |
+
+**Back navigation rules (drop on transition):**
+
+| From | To | Keys dropped |
+|---|---|---|
+| `choosing_master` | `choosing_service` | (none; service still in data — user just re-picks) |
+| `choosing_date` | `choosing_master` or `choosing_service` if single master | (none) |
+| `choosing_slot` | `choosing_date` | (none) |
+| `entering_contact` | `choosing_slot` | `client_name`, `client_phone`, `iso_datetime` |
+| `confirming` | `entering_contact` | `client_phone` (keep `client_name`) |
+
+## 11.2 Per-step messages (RU, OQ-2)
+
+| State | Bot message | Keyboard |
+|---|---|---|
+| `choosing_service` | `Выберите услугу:` | inline list of `{name} · {duration_min} хв · {price} грн`, 1/row, + Cancel row |
+| `choosing_master` | `Выберите мастера:` | inline list of master names, 1/row, + Back + Cancel row |
+| `choosing_date` | `Выберите дату:` | 2×7 grid (14 days); unavailable cells use combining-strike + `NavCB(noop_date)`; + Back + Cancel row |
+| `choosing_slot` | `Выберите время:` | header `—— До обіду ——` / `—— Після обіду ——` (noop) + 3/row time buttons; empty state → `На цю дату вільних слотів немає` + `← Інша дата` |
+| `entering_contact` (sub 1) | `Как вас зовут? Напишите имя текстом.` | reply keyboard removed |
+| `entering_contact` (sub 2) | `Оставьте номер телефона. Можно вручную или через кнопку «Поделиться контактом».` | reply keyboard with `📱 Поделиться контактом` (request_contact=True, one_time) |
+| `confirming` | `Подтвердите запись: …` (multi-line summary with service/master/date/time/name/phone) | inline 2-button row: ✅ Так, підтвердити / ✖ Скасувати |
+
+Race-condition message at confirm: `Этот слот только что заняли, выберите другой:` + fresh slot keyboard.
+
+Other UX strings: `MSG_CANCELLED`, `MSG_NAME_TOO_SHORT`, `MSG_INVALID_PHONE`, `MSG_DAY_UNAVAILABLE` (toast on tap of striked day), `MSG_GENERIC_ERROR`, `MSG_NO_MASTERS`. All centralized at top of `bot/handlers/booking.py` for one-shot localization later.
+
+## 11.3 Confirmation — atomic write order
+
+Implemented in `bot/handlers/booking.py::on_confirm`. Each step must succeed before the next runs, except where flagged "best-effort":
+
+1. **Race re-check.** `_compute_available_slots(...)` re-queries Sheet + Calendar fresh. If chosen `iso_datetime` ∉ available → set state back to `choosing_slot`, edit message to `MSG_SLOT_TAKEN` + fresh `build_slot_keyboard(...)`. STOP.
+2. **Build Booking model.** `booking_id = uuid.uuid4()`, `client_telegram_id = query.from_user.id`, `status="confirmed"`, `created_at=now()`, `reminder_*_sent=False`.
+3. **`sheets.append_booking(booking)`** — *blocking*. On failure → `MSG_GENERIC_ERROR`, return to main menu, clear state. STOP.
+4. **`calendar.create_event(...)`** — *best effort*. On success: `sheets.update_booking_status(id, "confirmed", calendar_event_id=event_id)`. On failure: log to stdout + `sheets.log_error(...)` row + set `calendar_pending = MSG_CALENDAR_PENDING_NOTE` (appended to owner notif only).
+5. **Reminders.** Loop `(24, 1)`: skip if `start - hours <= now()` (same-day < 1h). `schedule_reminder(booking_id, fire_at, kind)` — *best effort*; log on failure.
+6. **User success message** — edit confirmation message into `MSG_SUCCESS_TEMPLATE` + `build_user_booking_cancel_keyboard(booking_id)` (single-button inline with `BookingActionCB(booking_id, "cancel")` — the cancellation handler lands in Prompt 5).
+7. **Owner notification** — `await asyncio.sleep(0.05)` first (§3.7 rate-limit hygiene), then `bot.send_message(chat_id=settings.owner_telegram_chat_id, …)`. Best effort; log on failure.
+8. **`state.clear()`**.
+
+**Source-of-truth invariant:** the `bookings` Sheet row is committed at step 3. After that, **Calendar/reminder failures do not roll back the booking** — the row exists with `calendar_event_id=NULL` (filled by a manual retry / Prompt 7 reconciliation job if added). The user always sees a success message after step 3 succeeds; the owner sees the same plus the pending-calendar note when applicable.
+
+## 11.4 Edge cases handled
+
+- **`/cancel`** in any Booking state → `state.clear()` + main menu reply keyboard. No writes.
+- **Tap on striked day** → `query.answer("Этот день недоступен")` toast; state unchanged.
+- **Empty slot list for a date** → keyboard shows `На цю дату вільних слотів немає` + `← Інша дата` (NavCB back → state stays in `choosing_date`, message re-edited).
+- **Invalid phone text** → `MSG_INVALID_PHONE`; FSM stays in `entering_contact`, sub-step still 2.
+- **Name < 2 chars** → `MSG_NAME_TOO_SHORT`; FSM stays in `entering_contact`, sub-step still 1.
+- **Share-contact before name** → use `contact.first_name` (or `"Клиент"`) as `client_name`, store phone, jump straight to confirmation.
+- **Past slot on same-day booking** → filtered by `_compute_available_slots` (`s > now()` when `picked == today`).
+- **Service with no eligible active masters** → `query.answer(MSG_NO_MASTERS, show_alert=True)` and stay in `choosing_service`.
 
 **Definition of Done (Prompt 4):**
-- Full booking takes ≤10 button taps in the happy path
-- Each step has a Back button (returns to previous state, preserves data)
-- Choosing an occupied slot shows an error and re-fetches available slots
-- Cancel command in any state returns the user to the main menu cleanly
-- Confirmed booking writes one row to Sheets, creates one Calendar event, schedules two reminders, sends owner notification
+- ✅ Full booking takes ≤10 button taps in the happy path (1 reply menu tap + 5 inline picks + 2 text inputs + 1 confirm = 9)
+- ✅ Each step has a Back button (returns to previous state, preserves data per table 11.1)
+- ✅ Choosing an occupied slot shows an error and re-fetches available slots (`MSG_SLOT_TAKEN`)
+- ✅ `/cancel` in any state returns the user to the main menu cleanly
+- ✅ Confirmed booking writes one row to Sheets, creates one Calendar event (best-effort), schedules two reminders, sends owner notification
 
 ---
 
