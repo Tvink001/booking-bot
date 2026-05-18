@@ -1,0 +1,67 @@
+# =============================================================================
+# Booking Bot — .gitignore
+# Захищає секрети та локальні артефакти. Перед першим `git add .` переконайся,
+# що ці шаблони працюють: `git status` НЕ повинен показувати .env, credentials.json,
+# .mcp.json або data/scheduler.db.
+# =============================================================================
+
+# --- Секрети — НІКОЛИ не комітити ----------------------------------------
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+
+# Google service account JSON та будь-які інші ключі у secrets/
+secrets/*
+!secrets/README.md
+
+# Claude Code MCP-конфіг містить операторо-специфічний шлях до cmd-шима
+# та може містити секрети (див. learnings.md, project_specs.md §4.1)
+.mcp.json
+
+# --- Runtime-дані (persistent volume на Railway) -------------------------
+data/*
+!data/.gitkeep
+
+# --- Логи ----------------------------------------------------------------
+*.log
+logs/
+
+# --- Python --------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+pip-log.txt
+pip-delete-this-directory.txt
+.coverage
+.coverage.*
+htmlcov/
+
+# --- IDE / редактори -----------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# --- OS-сміття -----------------------------------------------------------
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# --- Тимчасові артефакти Claude / агентів --------------------------------
+.claude/cache/
