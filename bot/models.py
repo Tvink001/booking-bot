@@ -6,10 +6,67 @@ Booking additionally provides `to_row()` for writing via `append_row()` —
 the list order must match the column order in project_specs.md §7.3.
 """
 
+import re
 from datetime import date, datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
+
+# Sheets-tolerant datetime: handles "T" or " " separator, single-digit
+# components (Google Sheets renders ISO datetimes through the locale's
+# format and may strip leading zeros), optional microseconds and tz.
+_DT_RE = re.compile(
+    r"^(\d{4})-(\d{1,2})-(\d{1,2})"
+    r"(?:[T ](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?(?:\.(\d+))?"
+    r"(?:[+-]\d{2}:?\d{2}|Z)?)?$"
+)
+_DATE_RE = re.compile(r"^(\d{4})-(\d{1,2})-(\d{1,2})$")
+
+
+def _parse_dt(v: Any) -> datetime:
+    """Parse a datetime, tolerant of Google Sheets reformatting.
+
+    Sheets often munges `2026-05-19T02:14:08.123456` on display →
+    `2026-05-19 2:14:08` (space separator, dropped leading zero, dropped
+    microseconds). `datetime.fromisoformat` rejects the result, so we
+    fall back to a regex parse.
+    """
+    s = str(v).strip()
+    if not s:
+        raise ValueError("Empty datetime string")
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        pass
+    m = _DT_RE.match(s)
+    if not m:
+        raise ValueError(f"Cannot parse datetime: {v!r}")
+    year, month, day = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if m.group(4) is None:
+        return datetime(year, month, day)
+    hour, minute = int(m.group(4)), int(m.group(5))
+    second = int(m.group(6) or 0)
+    micro = int((m.group(7) or "0").ljust(6, "0")[:6])
+    return datetime(year, month, day, hour, minute, second, micro)
+
+
+def _parse_date(v: Any) -> date:
+    """Parse a date, tolerant of Google Sheets dropping zero-padding."""
+    if isinstance(v, datetime):
+        return v.date()
+    if isinstance(v, date):
+        return v
+    s = str(v).strip()
+    if not s:
+        raise ValueError("Empty date string")
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        pass
+    m = _DATE_RE.match(s)
+    if not m:
+        raise ValueError(f"Cannot parse date: {v!r}")
+    return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
 
 
 def _parse_bool(v: Any) -> bool:
@@ -105,11 +162,9 @@ class Blackout(BaseModel):
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> "Blackout":
-        d_raw = row["date"]
-        d = d_raw if isinstance(d_raw, date) else date.fromisoformat(str(d_raw))
         return cls(
             master_id=str(row["master_id"]),
-            date=d,
+            date=_parse_date(row["date"]),
             reason=str(row.get("reason") or ""),
         )
 
@@ -133,11 +188,8 @@ class Booking(BaseModel):
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> "Booking":
-        def _opt_dt(v: Any) -> datetime | None:
-            if not v:
-                return None
-            return datetime.fromisoformat(str(v))
-
+        cancelled_raw = row.get("cancelled_at")
+        cancelled = _parse_dt(cancelled_raw) if cancelled_raw else None
         return cls(
             id=str(row["id"]),
             client_telegram_id=int(row["client_telegram_id"]),
@@ -145,13 +197,13 @@ class Booking(BaseModel):
             client_phone=str(row.get("client_phone") or ""),
             service_id=str(row["service_id"]),
             master_id=str(row["master_id"]),
-            datetime_start=datetime.fromisoformat(str(row["datetime_start"])),
-            datetime_end=datetime.fromisoformat(str(row["datetime_end"])),
+            datetime_start=_parse_dt(row["datetime_start"]),
+            datetime_end=_parse_dt(row["datetime_end"]),
             status=str(row.get("status") or "confirmed"),
             reminder_24_sent=_parse_bool(row.get("reminder_24_sent")),
             reminder_1_sent=_parse_bool(row.get("reminder_1_sent")),
-            created_at=datetime.fromisoformat(str(row["created_at"])),
-            cancelled_at=_opt_dt(row.get("cancelled_at")),
+            created_at=_parse_dt(row["created_at"]),
+            cancelled_at=cancelled,
             calendar_event_id=(str(row.get("calendar_event_id") or "") or None),
             visit_count_snapshot=int(row.get("visit_count_snapshot") or 0),
         )

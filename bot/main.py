@@ -17,7 +17,9 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from aiohttp import web
 
 from bot.config import settings
+from bot.handlers.admin import admin_router
 from bot.handlers.booking import booking_router
+from bot.handlers.my_bookings import my_bookings_router
 from bot.handlers.start import start_router
 from bot.services.calendar import CalendarService
 from bot.services.scheduler import scheduler
@@ -43,6 +45,8 @@ def _build_dispatcher() -> Dispatcher:
     dp["calendar"] = CalendarService()
     dp.include_router(start_router)
     dp.include_router(booking_router)
+    dp.include_router(my_bookings_router)
+    dp.include_router(admin_router)
     dp.startup.register(_on_startup)
     dp.shutdown.register(_on_shutdown)
     return dp

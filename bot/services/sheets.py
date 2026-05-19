@@ -22,7 +22,7 @@ import gspread
 from gspread.utils import ValueInputOption
 
 from bot.config import settings
-from bot.models import Blackout, Booking, Master, Service
+from bot.models import Blackout, Booking, Master, Service, _parse_date, _parse_dt
 
 logger = logging.getLogger(__name__)
 
@@ -82,16 +82,15 @@ class SheetsService:
 
     async def load_blackouts_for_date(self, d: date) -> list[Blackout]:
         rows = await asyncio.to_thread(self._ws_blackouts.get_all_records, head=1)
-        target_iso = d.isoformat()
         out: list[Blackout] = []
         for r in rows:
             if not r.get("master_id"):
                 continue
-            raw = r.get("date")
-            if isinstance(raw, date) and not isinstance(raw, datetime):
-                if raw == d:
-                    out.append(Blackout.from_row(r))
-            elif str(raw) == target_iso:
+            try:
+                row_date = _parse_date(r.get("date"))
+            except ValueError:
+                continue
+            if row_date == d:
                 out.append(Blackout.from_row(r))
         return out
 
@@ -104,12 +103,15 @@ class SheetsService:
             if str(r.get("master_id")) != master_id:
                 continue
             try:
-                dt = datetime.fromisoformat(str(r["datetime_start"]))
+                dt = _parse_dt(r["datetime_start"])
             except (KeyError, ValueError):
                 continue
             if dt.date() != d:
                 continue
-            out.append(Booking.from_row(r))
+            try:
+                out.append(Booking.from_row(r))
+            except (KeyError, ValueError, TypeError) as e:
+                logger.warning("Skipping malformed booking row %s: %s", r.get("id"), e)
         return out
 
     async def load_all_bookings_for_client(self, client_telegram_id: int) -> list[Booking]:
@@ -123,7 +125,25 @@ class SheetsService:
                     continue
             except (TypeError, ValueError):
                 continue
-            out.append(Booking.from_row(r))
+            try:
+                out.append(Booking.from_row(r))
+            except (KeyError, ValueError, TypeError) as e:
+                logger.warning("Skipping malformed booking row %s: %s", r.get("id"), e)
+        return out
+
+    async def load_all_bookings(self) -> list[Booking]:
+        """Load every booking row. Used by /today /week /stats /export to
+        avoid N reads of the full sheet — bookings tab fits in memory for
+        any reasonable SMB scale (a few thousand rows over a year)."""
+        rows = await asyncio.to_thread(self._ws_bookings.get_all_records, head=1)
+        out: list[Booking] = []
+        for r in rows:
+            if not r.get("id"):
+                continue
+            try:
+                out.append(Booking.from_row(r))
+            except (KeyError, ValueError, TypeError) as e:
+                logger.warning("Skipping malformed booking row: %s", e)
         return out
 
     # ---------- writes ----------

@@ -23,7 +23,6 @@ HELP_TEXT = (
     "📋 «Мои записи» — посмотреть свои записи\n\n"
     "Для отмены текущего действия используй /cancel."
 )
-MY_BOOKINGS_PLACEHOLDER = "«Мои записи» появится в следующем промпте."
 NO_SERVICES_YET = "Услуг пока нет. Попробуйте позже."
 
 
@@ -35,17 +34,13 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 
 @start_router.message(F.text == "📅 Записатися")
 async def on_book(message: Message, state: FSMContext, sheets: SheetsService) -> None:
+    await state.clear()  # defense against tapping mid-flow
     services = await sheets.load_services()
     if not services:
         await message.answer(NO_SERVICES_YET)
         return
     await state.set_state(Booking.choosing_service)
     await message.answer("Выберите услугу:", reply_markup=build_service_keyboard(services))
-
-
-@start_router.message(F.text == "📋 Мої записи")
-async def on_my_bookings(message: Message) -> None:
-    await message.answer(MY_BOOKINGS_PLACEHOLDER)
 
 
 @start_router.message(F.text == "❓ Допомога")

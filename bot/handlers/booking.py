@@ -31,7 +31,7 @@ from bot.keyboards.inline import (
     build_slot_keyboard,
     build_user_booking_cancel_keyboard,
 )
-from bot.keyboards.reply import main_menu, remove, share_contact
+from bot.keyboards.reply import main_menu, share_contact
 from bot.models import Booking as BookingModel
 from bot.models import Master, Service
 from bot.services.calendar import CalendarService
@@ -438,7 +438,7 @@ async def on_contact_text(message: Message, state: FSMContext, sheets: SheetsSer
         await message.answer(MSG_INVALID_PHONE)
         return
     await state.update_data(client_phone=phone)
-    await message.answer("Принято.", reply_markup=remove())
+    await message.answer("Принято.", reply_markup=main_menu())
     await _show_confirmation(message, state, sheets)
 
 
@@ -458,7 +458,7 @@ async def on_contact_share(message: Message, state: FSMContext, sheets: SheetsSe
     else:
         await state.update_data(client_phone=normalized)
 
-    await message.answer("Принято.", reply_markup=remove())
+    await message.answer("Принято.", reply_markup=main_menu())
     await _show_confirmation(message, state, sheets)
 
 

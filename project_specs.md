@@ -1023,25 +1023,89 @@ Implemented in `bot/handlers/booking.py::on_confirm`. Each step must succeed bef
 
 ---
 
-# 12. My Bookings + Cancellation [TBD via Prompt 5]
+# 12. My Bookings + Cancellation [filled, Prompt 5]
 
-To be filled during Prompt 5. The `Мои записи` menu shows the user's upcoming bookings (status='confirmed', datetime_start > now), with a cancel button per booking. Cancellation: set status='cancelled' and cancelled_at, delete Calendar event, remove scheduled reminders, notify master.
+`bot/handlers/my_bookings.py`. Routes the `"📋 Мої записи"` reply-button text to `cmd_my_bookings`; cancellation routes via `BookingActionCB(action="cancel")` to `on_cancel_booking`.
+
+## 12.1 View
+
+`cmd_my_bookings`: loads `sheets.load_all_bookings_for_client(user_id)` once, filters `status == "confirmed" AND datetime_start > now()`, sorts ascending. If empty → "У вас пока нет предстоящих записей." Otherwise renders **one message per booking** with the row template:
+
+```
+📅 {dd.mm.yyyy} в {HH:MM}
+💇 {master_name}
+📋 {service_name}
+```
+
+Each message has an inline `✖ Отменить` button (`BookingActionCB(booking_id, "cancel")`). Per-message is by design — the cancel handler can `edit_text` the same message in-place after a successful cancellation.
+
+## 12.2 Cancellation invariants
+
+**Order matters.** Side effects on external state run BEFORE the Sheet status flip. If a step before the flip fails, the row stays `confirmed` and the user can retry. Only step 3 is the canonical "officially cancelled" moment.
+
+| Step | Action | On failure |
+|---|---|---|
+| 1 | `scheduler.cancel_reminders(booking_id)` | Log + continue; reminders re-fire idempotently check `status` before sending (Prompt 6) |
+| 2 | `calendar.delete_event(master.calendar_id, calendar_event_id)` | If error mentions `404` / `not found` / `has been deleted` → treat as success; other errors log + continue |
+| 3 | `sheets.update_booking_status(id, "cancelled", cancelled_at=now)` | **Hard fail**: reply `MSG_CANCEL_GENERIC_ERROR`, return; booking stays `confirmed` |
+| 4 | `bot.send_message(chat_id=master.telegram_id, …)` if `telegram_id` set | Log + continue; non-blocking |
+| 5 | `query.message.edit_text("✅ Запись отменена.")` | Log only; cancellation already succeeded |
+
+Defense against forged callback_data: `on_cancel_booking` loads bookings filtered by `user_id == query.from_user.id`; a user can't cancel someone else's booking even if they craft the `BookingActionCB(booking_id=...)` payload.
+
+This sequence is locked by `tests/test_cancellation_order.py::test_cancel_call_order_matches_invariant` — any future refactor that reorders the steps will fail that test.
 
 **Definition of Done:**
-- User sees only their own bookings
-- Cancellation frees the slot for re-booking (slot calculator excludes cancelled bookings)
-- Cancelled reminders do NOT fire
-- Master gets cancellation notification in their personal chat (if `masters.telegram_id` is set)
+- ✅ User sees only their own bookings (filtered by `client_telegram_id`)
+- ✅ Cancellation frees the slot for re-booking (slot calculator excludes `status != 'confirmed'`)
+- ✅ Cancelled reminders do NOT fire (Prompt 6 idempotency: reminder re-reads booking before sending)
+- ✅ Master gets DM notification if `masters.telegram_id` is set (skipped silently otherwise)
 
 ---
 
-# 13. Admin Commands [TBD via Prompt 5]
+# 13. Admin Commands [filled, Prompt 5]
 
-To be filled during Prompt 5. Commands restricted by `ADMIN_TELEGRAM_IDS` env var:
-- `/today` — list today's confirmed bookings, grouped by master
-- `/week` — same for next 7 days
-- `/stats` — count of confirmed/cancelled/completed/no_show for current month
-- `/export` — generate CSV of all bookings, send as Telegram document
+`bot/handlers/admin.py`. Four commands gated by `AdminFilter` (custom `aiogram.filters.Filter` subclass). Non-admins typing any of these get a single short reply via a fallback handler. Routing order: admin-filtered handler matches first; non-admin falls through to the fallback.
+
+## 13.1 `AdminFilter`
+
+```python
+class AdminFilter(Filter):
+    def __init__(self, admin_ids: list[int] | None = None) -> None:
+        self.admin_ids = admin_ids if admin_ids is not None else settings.admin_telegram_ids
+
+    async def __call__(self, event: Message) -> bool:
+        if event.from_user is None:
+            return False
+        return event.from_user.id in self.admin_ids
+```
+
+Constructor param `admin_ids` allows tests to bypass the `settings` singleton (`tests/test_admin_guard.py`).
+
+## 13.2 Commands
+
+| Cmd | Behavior | Message shape |
+|---|---|---|
+| `/today` | Group today's `status="confirmed"` bookings by `master_id`; one message per master | `📅 {master_name} — сегодня ({dd.mm.yyyy}):\n• {HH:MM} — {client_name} ({service_name}) 📞 {client_phone}\n…` |
+| `/week` | Same shape, range = `[today, today + 7d)` | `📅 {master_name} — ближайшие 7 дней:\n• {dd.mm HH:MM} — {client_name} ({service_name})\n…` |
+| `/stats` | Counts per `status` for current calendar month | One message with bullet counts of confirmed / cancelled / completed / no_show + total |
+| `/export` | CSV of current month's bookings, sent as `BufferedInputFile`; follow-up inline `📦 Все записи` button re-runs with `all_time=True` | Document with caption `Экспорт за MM.YYYY (N записей)` |
+
+Empty-state messages: "На сегодня (…) записей нет." / "На ближайшие 7 дней записей нет." Non-admin: "У вас нет прав на эту команду."
+
+## 13.3 Implementation notes
+
+- Single dispatcher handler `on_admin_command` switches on `cmd = message.text.split()[0].lstrip("/").lower()` to call `_do_today/_do_week/_do_stats/_do_export`. This keeps `Command(commands=_ADMIN_COMMANDS)` + `AdminFilter()` decoration in one place.
+- `SheetsService.load_all_bookings()` (new in Prompt 5) reads all rows once; admin commands filter in Python rather than making N reads per master/day. Acceptable for SMB scale (≤ few thousand rows over a year).
+- CSV uses `csv.writer` over `io.StringIO`; bytes prefixed with UTF-8 BOM (`﻿`) so Excel auto-detects encoding for Ukrainian/Russian names. Sent via `BufferedInputFile(file=bytes_, filename=f"bookings-{YYYY-MM}.csv")`.
+- "Все записи" follow-up uses `NavCB(action="export_all")` (reuses existing factory) — handler re-checks admin status defensively (in case the user is no longer admin between message and tap).
+- All 12 booking fields are exported (id, client_*, service_id, master_id, datetime_start/end, status, calendar_event_id, created_at, cancelled_at) — covers audit + import-into-Excel use cases.
+
+**Definition of Done:**
+- ✅ `/today /week /stats /export` work for users in `ADMIN_TELEGRAM_IDS`
+- ✅ Non-admins get the short rejection reply and nothing else (no leak about which commands exist beyond the names already in `BotFather`-set command list)
+- ✅ `/export` attachment opens cleanly in Excel/LibreOffice (BOM-prefixed UTF-8)
+- ✅ `/export` "Все записи" button re-runs scope without a date filter
 
 ---
 
