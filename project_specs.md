@@ -1333,9 +1333,9 @@ Create the `_vip_sent` worksheet in the same Google Sheet:
 
 If the tab doesn't exist when the bot starts, `SheetsService.__init__` raises `WorksheetNotFound` at boot — loud failure, immediately fixable.
 
-## 16.7 Temporary admin command (Prompt 8 only)
+## 16.7 Temporary admin command (Prompt 8 only — REMOVED in Prompt 10)
 
-`/run_vip` calls `check_vip_promos()` directly from the admin handler — for manual smoke testing the candidate-selection + DM flow without waiting for 09:00. **Removed in Prompt 10** (final cleanup).
+~~`/run_vip` calls `check_vip_promos()` directly from the admin handler~~ — was used for manual smoke testing during Prompt 8. **Removed in Prompt 10** per final-cleanup gate. The handler can be triggered for ad-hoc testing by temporarily re-adding it.
 
 ## 16.8 Definition of Done
 
@@ -1472,9 +1472,38 @@ Tests live in `tests/` next to `bot/`. `pytest-asyncio` for async test functions
 
 ---
 
-# 20. Architecture Doc + README Structure [TBD via Prompt 10]
+# 20. Architecture Doc + README Structure [filled, Prompt 10]
 
-To be filled during Prompt 10. README covers: value prop, GIF demo, stack, architecture summary (Mermaid), three WOW features with screenshots, Definition of Done, competencies block. `docs/architecture.md` (optional, can fold into README) covers the deeper architectural decisions for a reviewer.
+Two surfaces. README is the recruiter-facing entry; architecture.md is the engineer-facing deep dive.
+
+## 20.1 `README.md` (project root)
+
+Sections, in order:
+1. H1 + one-line value prop ("Telegram bot that replaces the booking-manager role…")
+2. Stack badges (Python / aiogram / APScheduler / Railway / Sheets / Calendar / Groq)
+3. Live demo — GIF at `docs/screenshots/demo.gif` (operator records the 30s sequence post-deploy)
+4. Architecture — Mermaid system diagram embedded inline; deep link to `docs/architecture.md`
+5. The three WOW features — one row each with one-liner + screenshot placeholder
+6. Stack list (Python 3.11, aiogram 3.27, APScheduler 4, gspread v6, google-api-python-client, AsyncGroq, pydantic-settings v2, aiohttp, Railway)
+7. Project structure tree (mirror of CLAUDE.md → Project Structure)
+8. Case narrative — problem / key architectural decisions / result
+9. Competencies demonstrated (async Python, aiogram FSM, external API integration, scheduling + idempotency, AI integration, production hygiene)
+10. Running locally + production-deploy pointer to §5.3
+11. License (portfolio note)
+
+## 20.2 `docs/architecture.md`
+
+Portfolio-grade rationale doc, ~300–500 words. NOT a setup guide. Sections:
+- Why a Telegram bot (vs WhatsApp / web form)
+- Why Sheets-as-CRM
+- Why APScheduler 4 (the brief said v3; we explain the rewrite — Context7-verified)
+- Why service-account calendar sharing (vs OAuth per master)
+- Idempotency strategy (three guards)
+- AI as enhancement layer (not critical path)
+- Error handling chain
+- Git as the disaster-recovery mechanism
+
+The same Mermaid system diagram appears in both files so a reviewer who lands on either gets the visual immediately.
 
 ---
 
@@ -1498,13 +1527,32 @@ This section is maintained jointly. Claude Code adds questions encountered durin
 
 ---
 
-# 22. Build Retrospective [TBD via Prompt 10]
+# 22. Build Retrospective [filled, Prompt 10]
 
-Filled at the end of Prompt 10 as one-paragraph reflections on:
+## 22.1 Biggest gotcha hit during the build
 
-- Biggest gotcha hit during the build
-- Biggest time-saver discovered
-- Library API surprises (APScheduler 4 is the obvious candidate)
-- What to do differently on the next project
+APScheduler 4 alpha (`4.0.0a6`) + `CBORSerializer` against `cbor2 ≥6.x` crashes on schedule fire with `AttributeError: 'bool' object has no attribute 'tag'` because cbor2 6.x changed `CBOREncoder.encode` internals in a way the alpha's encoder hook doesn't tolerate. Symptom: first reminder schedule looks fine, then on fire the worker task dies silently. **Fix:** switch the serializer to `PickleSerializer` and wipe `data/scheduler.db*` (the old CBOR blobs can't be read by Pickle). Documented in Prompt 6 commit + `bot/services/scheduler.py:35`. Lost ~90 minutes to this one. The alpha is a known-quantity trade-off: APScheduler v4 stable wasn't out, but v3 has the wrong API shape for async-native usage.
 
-This section seeds the next project's planning.
+## 22.2 Biggest time-saver discovered
+
+**Module-level workflow-data DI in aiogram.** `dp["sheets"] = SheetsService()` at startup → handlers declare `sheets: SheetsService` in their signature → aiogram auto-resolves by name. No FastAPI-style Depends, no manual passing, no globals. Handlers stay pure-ish (testable with `MagicMock` injection), services stay singletons (one gspread client, one Calendar discovery doc, one AsyncGroq). The same pattern wires `calendar`, `whisper`, and `bot` itself. This eliminated ~150 lines of plumbing across 6 handlers.
+
+## 22.3 Library API surprises
+
+- **APScheduler 4 is a full rewrite.** `AsyncIOScheduler` → `AsyncScheduler`, `add_job` → `add_schedule`, `SQLAlchemyJobStore` → `SQLAlchemyDataStore`, `start()` → `async with scheduler: ... start_in_background()`. Any tutorial older than 2024 targets v3 and won't work. Context7 against `/agronholm/apscheduler` is mandatory before writing any scheduler code.
+- **gspread v6 removed `Worksheet.get_records()`.** Use `get_all_records(head=1)`. The error is a confusing `AttributeError`, not a deprecation warning. Caught in Prompt 3 thanks to Context7 surfacing the migration note.
+- **Google Sheets locale-mangles CSV ints.** A text-typed cell containing `"1,2,3,4,5,6"` in a comma-as-thousands-separator locale becomes the integer `123456` — gspread returns `int`, not `str`. Wrote a defensive `_csv_ints` parser in `bot/models.py:83` that detects "all-digits int with values 1–7" and splits back to weekdays.
+- **Google Sheets reformats ISO datetimes on display.** `2026-05-19T02:14:08.123456` → `2026-05-19 2:14:08` (space separator, dropped leading zero, dropped microseconds). `datetime.fromisoformat` rejects the result. Wrote a regex-fallback `_parse_dt` in `bot/models.py:18`.
+- **APScheduler 4 alpha `remove_schedule` no-ops silently** on missing IDs (no `ScheduleLookupError` public class to catch). To log accurately, probe with `get_schedule` first — fix in Prompt 7 (`bot/services/scheduler.py:56`).
+- **`bot.download(file_id)` returns BytesIO, not bytes.** The Context7 page lists the return type as `bytes | None` but the actual implementation is `BinaryIO | None` (default `io.BytesIO`). Confirmed by reading the v3.27 source via Context7.
+- **Telegram callback_data 64-byte hard limit.** For the voice-confirm step, the transcribed name lives in FSM data, not in callback_data — long names (`Олександра Михайлівна`) would truncate.
+
+## 22.4 What to do differently on Project 3
+
+- **Spend the first 30 minutes Context7-verifying every library version in the brief BEFORE planning.** Two of the build's biggest detours (APScheduler 4 rewrite, gspread `get_records` removal) would have been caught at minute 5 of planning if I'd queried Context7 first instead of after writing the first wrong line.
+- **Use `PickleSerializer` from day one** on APScheduler 4 alpha. CBOR is "recommended" in the official docs but the alpha + cbor2 ≥6.x is broken; Pickle is one less moving piece. Revisit when v4 stable ships.
+- **Add a "Sheets sanity" probe** at startup that `get_all_records()`s each tab once and logs the row count. Would have surfaced the `_vip_sent` empty-headers problem and the CSV-locale bug in seconds instead of via mysterious `int 123456`.
+- **Locale-pin the spreadsheet at creation time** to `en_US` so the comma-as-thousands quirk doesn't bite. The operator created the sheet in their default locale; a documented "set locale before sharing" step in the setup checklist would have avoided 40 minutes of `_csv_ints` debugging.
+- **Plan the test pyramid up front** instead of growing it organically. By Prompt 9 the test suite is 77 tests across 11 files, but there's no `tests/test_sheets_io.py` covering the IO layer — that's a real gap. For Project 3, write a 1-test-per-method skeleton for every service class before any feature code.
+
+This section seeds Project 3's planning.

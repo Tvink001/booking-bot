@@ -20,15 +20,13 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.callbacks import NavCB
 from bot.config import settings
-from bot.handlers.vip import check_vip_promos
 from bot.models import Booking, Master, Service
 from bot.services.sheets import SheetsService
 
 logger = logging.getLogger(__name__)
 admin_router = Router()
 
-# `run_vip` is a temporary smoke-test command — removed in Prompt 10 per §16.7.
-_ADMIN_COMMANDS = ["today", "week", "stats", "export", "run_vip"]
+_ADMIN_COMMANDS = ["today", "week", "stats", "export"]
 
 MSG_NO_RIGHTS = "У вас нет прав на эту команду."
 MSG_TODAY_NONE = "На сегодня ({date_str}) записей нет."
@@ -69,8 +67,6 @@ async def on_admin_command(message: Message, bot: Bot, sheets: SheetsService) ->
         await _do_stats(message, sheets)
     elif cmd == "export":
         await _do_export(message, bot, sheets, all_time=False)
-    elif cmd == "run_vip":
-        await _do_run_vip(message)
 
 
 @admin_router.message(Command(commands=_ADMIN_COMMANDS))
@@ -240,18 +236,6 @@ async def _do_export(message: Message, bot: Bot, sheets: SheetsService, *, all_t
         caption=caption,
         reply_markup=markup,
     )
-
-
-async def _do_run_vip(message: Message) -> None:
-    """Manual smoke trigger for the VIP daily sweep — see §16.7.
-
-    Module-level `_bot` and `_sheets` in `bot.handlers.vip` are already
-    set by `bot/main.py:on_startup`, so we just call the function.
-    Removed in Prompt 10.
-    """
-    await message.answer("Запускаю VIP-проверку…")
-    await check_vip_promos()
-    await message.answer("VIP-проверка завершена. Лог в stdout.")
 
 
 # ============================================================================
