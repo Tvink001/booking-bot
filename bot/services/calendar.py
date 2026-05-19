@@ -11,7 +11,7 @@ suppresses the file-cache warning on systems without a writable cache.
 import asyncio
 import logging
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -85,17 +85,21 @@ class CalendarService:
         if cached and now_mono - cached[0] < _CACHE_TTL_SECONDS:
             return cached[1]
 
-        day_start_utc = datetime.combine(d, datetime.min.time()).replace(tzinfo=timezone.utc)
-        day_end_utc = day_start_utc + timedelta(days=1)
+        # Day bounds in Europe/Kyiv (not UTC) — otherwise events at the
+        # start of the Kyiv day (00:00–03:00 in summer) fall outside the
+        # query window for that date.
+        day_start_local = datetime.combine(d, datetime.min.time()).replace(tzinfo=self._local_tz)
+        day_end_local = day_start_local + timedelta(days=1)
 
         def _query() -> Any:
             return (
                 self._service.freebusy()
                 .query(
                     body={
-                        "timeMin": day_start_utc.isoformat(),
-                        "timeMax": day_end_utc.isoformat(),
+                        "timeMin": day_start_local.isoformat(),
+                        "timeMax": day_end_local.isoformat(),
                         "items": [{"id": master_calendar_id}],
+                        "timeZone": settings.google_calendar_default_tz,
                     }
                 )
                 .execute()

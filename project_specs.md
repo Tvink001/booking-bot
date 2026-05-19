@@ -1194,18 +1194,79 @@ The booking handler loops `(24, 1)` and skips any kind whose `fire_at <= now()` 
 
 ---
 
-# 15. WOW 1 — Google Calendar Two-Way Sync [TBD via Prompt 7]
+# 15. WOW 1 — Google Calendar Two-Way Sync [filled, Prompt 7]
 
-To be filled during Prompt 7. The two-way nature:
-- One way already: bot creates events in master's calendar on booking
-- The other way (this WOW): slot calculator reads freebusy from master's calendar, so manually-blocked time (master added "Lunch 12-13" directly in Google Calendar) becomes unbookable
+## 15.1 Behavior
 
-Implementation: section 9.5 step 5 in slot calculation. Plus a 60-second TTL cache per (master_id, date) to avoid hammering Calendar API during slot browsing.
+Two directions:
+1. **Bot → Calendar** (already): on every confirmed booking, `bot.services.calendar.CalendarService.create_event` writes a Calendar event on the master's calendar. Stored `event_id` lives in the Sheet row's `calendar_event_id` column for later deletion.
+2. **Calendar → Bot** (this WOW): on every slot picker render, `CalendarService.query_busy_intervals(master.calendar_id, picked_date)` reads the master's freebusy for that day. Returned intervals are folded into `slots.calculate_available_slots`' busy set alongside confirmed bookings. A master who manually blocks time in their own Google Calendar (e.g. "Lunch 12:00–13:00") sees those slots automatically disappear from the bot's offering.
+
+The Prompt 3 implementation wired the read end-to-end (`slots.py` accepts `calendar_busy_intervals`, `booking._compute_available_slots` calls `query_busy_intervals`). Prompt 7 fixed an edge-case time-window bug (UTC bounds → Kyiv bounds), added the explicit `timeZone` request field, and added regression tests for the cache.
+
+## 15.2 freebusy request body
+
+```python
+day_start_local = datetime.combine(d, datetime.min.time()).replace(tzinfo=ZoneInfo("Europe/Kyiv"))
+day_end_local = day_start_local + timedelta(days=1)
+body = {
+    "timeMin": day_start_local.isoformat(),   # RFC3339 with +03:00 offset (summer)
+    "timeMax": day_end_local.isoformat(),
+    "items": [{"id": master_calendar_id}],
+    "timeZone": settings.google_calendar_default_tz,
+}
+```
+
+**Day bounds in Europe/Kyiv, not UTC.** Earlier (Prompt 3) the bounds used `tzinfo=timezone.utc`, which for `d = 2026-05-20` sent `2026-05-20T00:00:00+00:00` = 03:00 Kyiv — events between 00:00–03:00 Kyiv on the requested date were missed (and 00:00–03:00 Kyiv of the next date were wrongly included). Not visible in v1 work hours (10:00–19:00) but a real correctness gap.
+
+`timeZone` is optional per Google docs (controls response interpretation) — included for clarity and as defense against future API behavior changes.
+
+## 15.3 freebusy response
+
+Google Calendar API returns response intervals as **RFC3339 in UTC** (`Z` suffix) regardless of the `timeZone` request field. Parser:
+
+```python
+busy_raw = resp["calendars"][master_calendar_id].get("busy", [])
+for b in busy_raw:
+    start_utc = datetime.fromisoformat(str(b["start"]).replace("Z", "+00:00"))
+    end_utc = datetime.fromisoformat(str(b["end"]).replace("Z", "+00:00"))
+    start_local = start_utc.astimezone(self._local_tz).replace(tzinfo=None)
+    end_local = end_utc.astimezone(self._local_tz).replace(tzinfo=None)
+    intervals.append((start_local, end_local))
+```
+
+`fromisoformat` accepts `+00:00` directly in Python 3.11+. The `Z → +00:00` swap is defensive against future variants.
+
+**Output is naive Europe/Kyiv** — matches the rest of the codebase. `Booking.datetime_start`, slot candidates, blackouts — all naive throughout. Switching to tz-aware in calendar alone would cascade `TypeError` through `slots.calculate_available_slots`' overlap check (`slot_end > existing_start AND slot_start < existing_end`).
+
+## 15.4 Cache
+
+- Key: `(master_calendar_id, iso_date)` tuple
+- Value: `(monotonic_set_at, intervals)`
+- TTL: 60 seconds via `time.monotonic()` (immune to wall-clock changes)
+- Invalidation: explicit on `create_event` for that `(calendar_id, day)` — the just-written event would otherwise still appear absent in the next 60 sec window. No explicit invalidation on `delete_event` because the 60-sec staleness is acceptable per DoD.
+
+## 15.5 Verification
+
+Unit (`tests/test_calendar_cache.py`):
+- `test_cache_hit_within_ttl` — call twice at 100s, 159s → API hit only once
+- `test_cache_miss_after_ttl` — call at 100s, 161s → API hit twice
+- `test_cache_keys_distinct_per_calendar_and_date` — different cal_id OR different date doesn't share cache
+- `test_response_parsing_normalizes_to_naive_kyiv` — `12:00Z` becomes naive 15:00 Kyiv (DST)
+
+Manual:
+1. In Google Calendar under the master account, add event tomorrow 12:00–13:00 titled "Lunch"
+2. In bot: `/start` → 📅 Записатися → pick service → pick master → tomorrow's date
+3. Slot picker must NOT show 12:00 or 12:30 (assuming `service.duration_min = 30`)
+4. Delete the event in Google Calendar
+5. Wait 65 seconds (TTL 60s + buffer)
+6. ← Назад to date → re-enter same date → 12:00 and 12:30 reappear
 
 **Definition of Done:**
-- Master manually adds an event "Lunch" 12:00-13:00 in Google Calendar
-- Bot's slot list for that date and master does NOT show 12:00 or 12:30 slots
-- Removing the manual event makes slots available again within 60 seconds (cache TTL)
+- ✅ Manual event "Lunch" 12:00-13:00 excludes 12:00 and 12:30 slots in bot
+- ✅ Removing the manual event makes slots available again within 60 seconds (cache TTL)
+- ✅ Cache TTL behavior locked by `tests/test_calendar_cache.py`
+- ✅ Day-bounds bug fixed: events 00:00-03:00 Kyiv on the queried date are no longer missed
 
 ---
 

@@ -54,17 +54,30 @@ async def schedule_reminder(booking_id: str, fire_at: datetime, kind: int) -> No
 
 
 async def cancel_reminders(booking_id: str) -> None:
-    """Cancel both 24h and 1h reminders for a booking. Silent on already-gone."""
+    """Cancel both 24h and 1h reminders for a booking. Silent on already-gone.
+
+    Logs INFO only when a real schedule was present and removed. Logs DEBUG
+    when the schedule didn't exist (no-op) — APScheduler 4 alpha's
+    `remove_schedule` no-ops silently on missing ids, so we probe with
+    `get_schedule` first to distinguish the two cases.
+    """
     for kind in (24, 1):
         sid = _reminder_id(booking_id, kind)
+        existed = False
+        try:
+            await scheduler.get_schedule(sid)
+            existed = True
+        except Exception:  # noqa: BLE001  --  alpha doesn't export lookup error
+            pass
         try:
             await scheduler.remove_schedule(sid)
+        except Exception as exc:  # noqa: BLE001  --  benign: already-gone
+            logger.debug("Schedule %s remove failed: %s", sid, exc)
+            continue
+        if existed:
             logger.info("Cancelled schedule %s", sid)
-        except Exception as exc:  # noqa: BLE001  --  benign: already-cancelled
-            # APScheduler 4 alpha doesn't export a stable lookup-error class;
-            # cancelling a non-existent schedule (already fired or never set)
-            # is the expected path on a no-op cancel. Log at debug level.
-            logger.debug("Schedule %s not removable: %s", sid, exc)
+        else:
+            logger.debug("Schedule %s not present (no-op)", sid)
 
 
 async def schedule_daily_job(
