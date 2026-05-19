@@ -20,6 +20,7 @@ from aiogram import Bot, F, Router
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.callbacks import DateCB, MasterCB, NavCB, ServiceCB, SlotCB
 from bot.config import settings
@@ -39,6 +40,7 @@ from bot.services.phone import normalize_phone
 from bot.services.scheduler import schedule_reminder
 from bot.services.sheets import SheetsService
 from bot.services.slots import calculate_available_slots
+from bot.services.whisper import WhisperService
 from bot.states import Booking
 
 logger = logging.getLogger(__name__)
@@ -53,8 +55,15 @@ MSG_PICK_SERVICE = "Выберите услугу:"
 MSG_PICK_MASTER = "Выберите мастера:"
 MSG_PICK_DATE = "Выберите дату:"
 MSG_PICK_SLOT = "Выберите время:"
-MSG_ENTER_NAME = "Как вас зовут? Напишите имя текстом."
+MSG_ENTER_NAME = "Как вас зовут? Напишите имя текстом или запишите голосом."
 MSG_ENTER_PHONE = "Оставьте номер телефона.\nМожно вручную или через кнопку «Поделиться контактом»."
+MSG_VOICE_PROMPT = "🎤 Запишите голосовое сообщение со своим именем."
+MSG_VOICE_TOO_LARGE = "Файл слишком большой. Запишите короче или введите имя текстом."
+MSG_VOICE_TRANSCRIBE_FAILED = "Не удалось распознать голос. Введите имя текстом."
+MSG_VOICE_TRANSCRIBE_EMPTY = "Не удалось распознать чисто. Попробуйте ещё раз или введите текстом."
+MSG_VOICE_CONFIRM_TEMPLATE = "Распознано: {name}\n\nПодтвердить или отредактировать?"
+MSG_VOICE_NOT_FOR_PHONE = "Для номера используйте цифры или кнопку «Поделиться контактом»."
+MSG_VOICE_ONLY_FOR_NAME = "Голосовой ввод — только для имени."
 MSG_NO_MASTERS = "Нет доступных мастеров для этой услуги."
 MSG_NAME_TOO_SHORT = "Имя слишком короткое. Введите ещё раз."
 MSG_INVALID_PHONE = (
@@ -166,6 +175,13 @@ async def _safe_edit(
                     text=text,
                     reply_markup=reply_markup,
                 )
+
+
+def _voice_button_kb() -> InlineKeyboardMarkup:
+    """Single-button inline keyboard offering voice input on the name prompt."""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🎤 Голосом", callback_data=NavCB(action="voice_input").pack())
+    return kb.as_markup()
 
 
 async def _show_confirmation(
@@ -411,7 +427,7 @@ async def on_slot_pick(
     chosen = datetime.combine(d, datetime.min.time()).replace(hour=hh, minute=mm)
     await state.update_data(iso_datetime=chosen.isoformat())
     await state.set_state(Booking.entering_contact)
-    await _safe_edit(query, MSG_ENTER_NAME)
+    await _safe_edit(query, MSG_ENTER_NAME, _voice_button_kb())
     await query.answer()
 
 
@@ -460,6 +476,117 @@ async def on_contact_share(message: Message, state: FSMContext, sheets: SheetsSe
 
     await message.answer("Принято.", reply_markup=main_menu())
     await _show_confirmation(message, state, sheets)
+
+
+# ============================================================================
+# Voice name input (WOW 3 — Groq Whisper)
+# ============================================================================
+
+
+@booking_router.callback_query(
+    NavCB.filter(F.action == "voice_input"),
+    StateFilter(Booking.entering_contact),
+)
+async def on_voice_input(query: CallbackQuery, state: FSMContext) -> None:
+    """User tapped 🎤 Голосом — switch the prompt to voice-record instructions."""
+    data = await state.get_data()
+    if "client_name" in data:
+        await query.answer(MSG_VOICE_ONLY_FOR_NAME, show_alert=True)
+        return
+    await _safe_edit(query, MSG_VOICE_PROMPT)
+    await query.answer()
+
+
+@booking_router.message(StateFilter(Booking.entering_contact), F.voice)
+async def on_contact_voice(
+    message: Message,
+    state: FSMContext,
+    bot: Bot,
+    sheets: SheetsService,
+    whisper: WhisperService,
+) -> None:
+    """Transcribe voice → name. Soft failures stay in state; hard API failures
+    also log to _errors. Voice is only valid for the name sub-step; if the
+    user already entered name and is at the phone sub-step, redirect them.
+    """
+    if message.voice is None or message.from_user is None:
+        return
+    data = await state.get_data()
+    if "client_name" in data:
+        await message.answer(MSG_VOICE_NOT_FOR_PHONE, reply_markup=share_contact())
+        return
+
+    # 1 MB cap — anything bigger than a name clip is suspicious (§9.4).
+    if message.voice.file_size and message.voice.file_size > 1_000_000:
+        await message.answer(MSG_VOICE_TOO_LARGE)
+        return
+
+    try:
+        voice_file = await bot.download(message.voice.file_id)
+        if voice_file is None:
+            raise RuntimeError("bot.download returned None")
+        file_bytes = voice_file.read()
+        name = await whisper.transcribe(file_bytes, language="ru")
+    except Exception as exc:
+        logger.warning("Voice transcribe hard-fail: %s", exc)
+        await _log_error_safe(
+            sheets,
+            handler="booking.on_contact_voice.transcribe",
+            user_id=message.from_user.id,
+            error_text=f"whisper.transcribe failed: {type(exc).__name__}: {exc}",
+            payload={"file_size": message.voice.file_size},
+        )
+        await message.answer(MSG_VOICE_TRANSCRIBE_FAILED)
+        return
+
+    if not name or len(name) > 50:
+        logger.info("Voice transcribe soft-skip (empty or too long): %r", name)
+        await message.answer(MSG_VOICE_TRANSCRIBE_EMPTY)
+        return
+
+    # Pending name lives in FSM data — callback_data 64-byte limit would
+    # truncate longer names if we tried to round-trip via callback payload.
+    await state.update_data(pending_voice_name=name)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Подтвердить", callback_data=NavCB(action="voice_confirm").pack())
+    kb.button(text="✏️ Редактировать", callback_data=NavCB(action="voice_edit").pack())
+    kb.adjust(2)
+    await message.answer(
+        MSG_VOICE_CONFIRM_TEMPLATE.format(name=name),
+        reply_markup=kb.as_markup(),
+    )
+
+
+@booking_router.callback_query(
+    NavCB.filter(F.action == "voice_confirm"),
+    StateFilter(Booking.entering_contact),
+)
+async def on_voice_confirm(query: CallbackQuery, state: FSMContext) -> None:
+    """User accepted the transcribed name → save it and advance to phone step."""
+    data = await state.get_data()
+    name = str(data.get("pending_voice_name", "")).strip()
+    if not name:
+        await query.answer(MSG_GENERIC_ERROR, show_alert=True)
+        return
+    await state.update_data(client_name=name, pending_voice_name=None)
+    if isinstance(query.message, Message):
+        try:
+            await query.message.edit_text(f"Имя: {name}")
+        except Exception:
+            logger.exception("voice_confirm edit_text failed")
+        await query.message.answer(MSG_ENTER_PHONE, reply_markup=share_contact())
+    await query.answer()
+
+
+@booking_router.callback_query(
+    NavCB.filter(F.action == "voice_edit"),
+    StateFilter(Booking.entering_contact),
+)
+async def on_voice_edit(query: CallbackQuery, state: FSMContext) -> None:
+    """User rejected the transcription → revert to the name prompt + voice button."""
+    await state.update_data(pending_voice_name=None)
+    await _safe_edit(query, MSG_ENTER_NAME, _voice_button_kb())
+    await query.answer()
 
 
 # ============================================================================

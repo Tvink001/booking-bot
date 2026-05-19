@@ -1348,26 +1348,65 @@ If the tab doesn't exist when the bot starts, `SheetsService.__init__` raises `W
 
 ---
 
-# 17. WOW 3 — Voice Name Input [TBD via Prompt 9]
+# 17. WOW 3 — Voice Name Input [filled, Prompt 9]
 
-To be filled during Prompt 9. At the `entering_contact` state, the bot shows three options:
-- Standard text input (typing name + phone)
-- "📱 Поделиться контактом" reply keyboard button (Telegram's native contact share)
-- "🎤 Голосом" inline button (this WOW)
+## 17.1 Behavior
 
-Voice flow:
-- User taps "🎤 Голосом"
-- Bot prompts: "Запишите голосовое сообщение со своим именем"
-- User records voice message
-- Handler catches `message.voice`, downloads via `bot.download()`, transcribes via `services.whisper.transcribe(file_bytes, language='ru')` using Groq's `whisper-large-v3-turbo`
-- Result inserted as `client_name`; bot shows: "Распознано: {name}. Подтвердить?" with Yes/Edit buttons
+At the `entering_contact` state, **name sub-step only**, the bot offers three input paths:
+- Standard text input (typing name).
+- "🎤 Голосом" inline button (this WOW).
+- (Phone sub-step has its own paths: text + "📱 Поделиться контактом" reply keyboard — voice is NOT offered for phone because normalization expects digits, not natural speech.)
 
-**Definition of Done:**
-- Voice name input works in Russian and Ukrainian (Whisper Large v3 has materially better UA accuracy than v2 — verify with at least 3 Ukrainian name samples)
-- Transcription latency <3 seconds for a 5-second clip (Groq is typically <1 s end-to-end thanks to their inference hardware)
-- File size limit enforced (reject >1 MB at the handler before any API call)
-- Failure (Groq API down, rate limit hit, transcription empty) falls back to text input gracefully — handler stays in `entering_contact` state, logs to `_errors`, shows friendly message
-- Free-tier verification: zero charges accrued during the build and on the live demo Railway deploy (Groq dashboard "Usage" page confirms $0)
+Voice flow (RU):
+1. User arrives at the name prompt: `"Как вас зовут? Напишите имя текстом или запишите голосом."` with inline 🎤 button.
+2. User taps 🎤 → prompt edits to `"🎤 Запишите голосовое сообщение со своим именем."` Bot stays in `Booking.entering_contact`.
+3. User records OGG voice → `F.voice` handler fires.
+4. Bot downloads via `bot.download(file_id)` (returns `BinaryIO`, `.read()` for bytes), transcribes via `WhisperService.transcribe(bytes, language='ru')`.
+5. Bot shows `"Распознано: {name}\n\nПодтвердить или отредактировать?"` with two inline buttons: ✅ Подтвердить / ✏️ Редактировать.
+6. ✅ → `client_name=name`, advances to phone sub-step (same as text path).
+7. ✏️ → reverts to name prompt with the voice button.
+
+Wiring: `WhisperService` is constructed in `bot.main:_build_dispatcher` and injected via workflow-data DI (`dp["whisper"] = WhisperService()`). Handler param name must be exactly `whisper: WhisperService` for aiogram's by-name DI lookup.
+
+## 17.2 Model + provider
+
+**Groq's `whisper-large-v3-turbo`** (Context7-verified against `/groq/groq-python`, May 2026). Permanent free tier, identical SDK shape to OpenAI's `audio.transcriptions.create`. Full rationale: §2.1 + §9.4. If a newer model appears in Groq's docs (e.g. `whisper-large-v4`), flag in §21 — do NOT swap silently; UA/RU accuracy on the newer model needs an empirical check first.
+
+## 17.3 Audio constraints
+
+- **Hard cap: 1 MB** at the handler level — anything larger than that for a *name* clip is suspicious (long ramble vs short name).
+- **Format passthrough:** Telegram voice messages are OGG/OPUS; Groq accepts OGG natively → no transcoding, no temp file.
+- **In-memory:** download returns `io.BytesIO` (per Context7 against `/websites/aiogram_dev_en_v3_27_0`); we `.read()` to bytes and pass to Groq's `file=(filename, bytes, mimetype)` tuple shape.
+
+## 17.4 Error routing (2-tier)
+
+Per `learnings.md` `#error-handling` ("Don't throw on partial user-side data"):
+
+| Failure type | stdlib log | `_errors` Sheet | User message | State |
+|---|---|---|---|---|
+| File > 1 MB | — | — | `MSG_VOICE_TOO_LARGE` | stay |
+| Empty / >50-char transcription | `logger.info` | — | `MSG_VOICE_TRANSCRIBE_EMPTY` | stay |
+| Groq API exception (network, 4xx/5xx, 401) | `logger.warning` | yes (via `_log_error_safe`) | `MSG_VOICE_TRANSCRIBE_FAILED` | stay |
+| `bot.download()` returns None | `logger.warning` | yes | same | stay |
+
+No path re-raises — the global error handler never sees voice-flow events. The `_log_error_safe` wrapper (booking.py) suppresses Sheet-write failures so a Sheets outage during a Groq outage doesn't double-fail.
+
+## 17.5 Language decision (OQ-2-aligned, see OQ-6)
+
+UI strings: **RU** (consistent with the rest of the bot). Whisper `language='ru'`. Common Slavic phonetics on Whisper Large v3 cross-recognize RU/UK names reasonably. Revisit if testers report friction (OQ-6).
+
+## 17.6 Free-tier verification
+
+DoD: after the manual test pass, open https://console.groq.com → Usage → confirm cumulative charges = **$0**. Groq's free tier covers portfolio-demo traffic by a wide margin (ASD/ASH quotas at the org level).
+
+## 17.7 Definition of Done
+
+- Voice name input works in RU (and acceptably for UA-spelled names with `language='ru'`).
+- Transcription latency <3 seconds for a 5-second clip (Groq is typically <1 s end-to-end).
+- File size limit (1 MB) enforced at the handler before any API call.
+- All four failure modes (file too large / empty transcription / API hard fail / download None) fall back gracefully with friendly RU messages and stay in `entering_contact`.
+- Hard API failures land in the `_errors` Sheet with sanitized payload (no token leakage).
+- Groq Console "Usage" page shows $0 after the test pass.
 
 ---
 
@@ -1454,6 +1493,8 @@ This section is maintained jointly. Claude Code adds questions encountered durin
 **OQ-4 (Prompt 1, decide in Prompt 6).** Bot instance lifecycle inside APScheduler-fired callbacks (`send_reminder`, `check_vip_promos`). Two options: **(a)** short-lived `Bot` constructed inside each call and closed via `await bot.session.close()` in `finally` — safer against cross-event-loop bugs, ~10 ms overhead per fire; **(b)** shared module-level `Bot` constructed once and reused — faster, but requires the scheduler worker to share the dispatcher's event loop (true with APScheduler 4 `async with scheduler: ... start_in_background()` on the main loop). **Default:** option (a) in Prompt 6 implementation. **Trigger to revisit:** if reminder latency or per-fire cost becomes observable on Railway.
 
 **OQ-5 (Prompt 1, decide in Prompt 2).** Exact `groq` SDK version pin for `pyproject.toml`. Context7 query against `/groq/groq-python` (May 2026) confirmed the API shape (`AsyncGroq`, `audio.transcriptions.create` with `whisper-large-v3-turbo`, file as tuple/Path/bytes) but did not surface a precise current version. `learnings.md` baseline = `0.13.0`. **Action before Prompt 2 pin:** run `Context7:resolve-library-id({libraryName: 'groq'})` and read the `Versions` block; pick latest stable that still exposes `audio.transcriptions.create` with the verified signature.
+
+**OQ-6 (Prompt 9).** Voice transcription uses `language='ru'` only in v1 (per §17.5). Mixed-region testers may have Ukrainian-spelled names with RU phonetics; Whisper Large v3 cross-recognizes reasonably but not perfectly. **Trigger to revisit:** ≥3 UA-name misrecognitions reported by testers → add an auto-detect branch keyed on `from_user.language_code`, falling back to `'ru'`. Also flag any newer Groq Whisper model (`v4` etc.) surfaced in Context7 — verify UA/RU accuracy empirically before swapping.
 
 ---
 

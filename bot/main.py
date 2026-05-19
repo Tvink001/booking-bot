@@ -27,6 +27,7 @@ from bot.handlers.vip import set_runtime as set_vip_runtime
 from bot.services.calendar import CalendarService
 from bot.services.scheduler import schedule_daily_job, scheduler
 from bot.services.sheets import SheetsService
+from bot.services.whisper import WhisperService
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,7 @@ def _build_dispatcher() -> Dispatcher:
     sheets = SheetsService()
     dp["sheets"] = sheets
     dp["calendar"] = CalendarService()
+    dp["whisper"] = WhisperService()
     dp.include_router(start_router)
     dp.include_router(booking_router)
     dp.include_router(my_bookings_router)
