@@ -54,6 +54,10 @@ class SheetsService:
         self._ws_bookings = self._sh.worksheet("bookings")
         self._ws_blackouts = self._sh.worksheet("blackouts")
         self._ws_errors = self._sh.worksheet("_errors")
+        # `_vip_sent` is the idempotency guard for WOW 2 — see §16.2.
+        # Operator creates this tab manually (headers: client_telegram_id, sent_at).
+        # Missing tab → WorksheetNotFound at boot — loud, easy to fix.
+        self._ws_vip_sent = self._sh.worksheet("_vip_sent")
 
     # ---------- reads ----------
 
@@ -212,6 +216,34 @@ class SheetsService:
             self._ws_bookings.update,
             [["TRUE"]],
             cell_a1,
+            value_input_option=ValueInputOption.user_entered,
+        )
+
+    async def load_vip_sent(self) -> set[int]:
+        """Return the set of telegram IDs that already received the VIP DM.
+
+        Reads the `_vip_sent` sheet. Malformed rows (missing/non-int id) are
+        skipped with a warning rather than raising — same partial-data
+        discipline as the other loaders.
+        """
+        rows = await asyncio.to_thread(self._ws_vip_sent.get_all_records, head=1)
+        out: set[int] = set()
+        for r in rows:
+            raw = r.get("client_telegram_id")
+            if raw is None or raw == "":
+                continue
+            try:
+                out.add(int(raw))
+            except (TypeError, ValueError):
+                logger.warning("Skipping malformed _vip_sent row: %r", r)
+        return out
+
+    async def append_vip_sent(self, client_telegram_id: int) -> None:
+        """Record that `client_telegram_id` received the VIP DM at now()."""
+        row: list[Any] = [client_telegram_id, datetime.now().isoformat()]
+        await asyncio.to_thread(
+            self._ws_vip_sent.append_row,
+            row,
             value_input_option=ValueInputOption.user_entered,
         )
 

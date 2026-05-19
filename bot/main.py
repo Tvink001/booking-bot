@@ -22,8 +22,10 @@ from bot.handlers.booking import booking_router
 from bot.handlers.my_bookings import my_bookings_router
 from bot.handlers.reminders import set_runtime as set_reminders_runtime
 from bot.handlers.start import start_router
+from bot.handlers.vip import check_vip_promos
+from bot.handlers.vip import set_runtime as set_vip_runtime
 from bot.services.calendar import CalendarService
-from bot.services.scheduler import scheduler
+from bot.services.scheduler import schedule_daily_job, scheduler
 from bot.services.sheets import SheetsService
 
 logger = logging.getLogger(__name__)
@@ -52,10 +54,14 @@ def _build_dispatcher() -> Dispatcher:
 
     async def _on_startup(bot: Bot) -> None:
         # set_runtime BEFORE start_in_background — otherwise an
-        # immediately-due reminder could fire with _bot/_sheets None.
+        # immediately-due reminder/VIP could fire with _bot/_sheets None.
         set_reminders_runtime(bot, sheets)
+        set_vip_runtime(bot, sheets)
         await scheduler.__aenter__()
         await scheduler.start_in_background()
+        # Idempotent re-registration of the daily VIP cron (ConflictPolicy.replace).
+        # See project_specs.md §16.1.
+        await schedule_daily_job("daily_vip_check", check_vip_promos, 9, 0)
         logger.info("APScheduler started; data store at %s", settings.scheduler_db_path)
 
         if settings.mode == "webhook":

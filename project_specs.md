@@ -1270,19 +1270,81 @@ Manual:
 
 ---
 
-# 16. WOW 2 — Automatic VIP Status [TBD via Prompt 8]
+# 16. WOW 2 — Automatic VIP Status [filled, Prompt 8]
 
-To be filled during Prompt 8. Implementation:
-- Daily CronTrigger at 09:00 Europe/Kyiv: scan all clients with `visit_count >= 5` who have an upcoming booking in the next 7 days
-- For each, send a VIP notification: "⭐ You're now a VIP after 5 visits! Use promo code SUPERVIP for your next booking."
-- Idempotency: track in a Sheets column or a separate sheet whether the VIP message has been sent to each client (don't spam every day)
+## 16.1 Behavior
 
-Visit count is computed from `bookings` rows with `status='completed'` for that `client_telegram_id`. Stored as snapshot in `visit_count_snapshot` column at booking time for fast lookup.
+A daily cron at **09:00 Europe/Kyiv** scans bookings for clients who satisfy ALL of:
+1. Have **≥5 bookings with `status='completed'`** (lifetime visits, across all masters/services).
+2. Have **at least one `status='confirmed'` booking in the next 7 days** — limits the audience to active clients who'll actually use the promo.
+3. Have **not previously received the VIP DM** (idempotency, see §16.2).
 
-**Definition of Done:**
-- Client with 5 completed bookings receives the VIP message exactly once
-- Promo code is constant for now (no per-client codes — out of scope)
-- VIP check runs daily, idempotent
+Each qualifying client receives one DM containing the static promo code `SUPERVIP`. Their telegram ID is then appended to the `_vip_sent` sheet — once present, they're skipped on every future run.
+
+Wiring: `bot/handlers/vip.py::check_vip_promos`, scheduled in `bot.main:_on_startup` via `await scheduler.schedule_daily_job("daily_vip_check", check_vip_promos, 9, 0)`. Re-registration on every restart is idempotent (`ConflictPolicy.replace` baked into `schedule_daily_job`).
+
+## 16.2 Idempotency — OQ-0 resolution
+
+**Decision:** new sheet **`_vip_sent`**, columns A=`client_telegram_id` (int), B=`sent_at` (ISO datetime).
+
+**Why this over a `bookings.vip_message_sent_at` column:**
+- VIP status is a property of the **client**, not of any single booking row. A `bookings.vip_sent_at` column would either need a "which row owns the flag?" rule (brittle), or duplication of the same timestamp across every row of that client (data-integrity headache on backfill / corrections).
+- A small dedicated tab keeps the `bookings` row schema stable and makes "who got a VIP DM" a single `get_all_records` of a tiny sheet (one row per lifetime VIP client).
+- Trade-off accepted: one extra Sheets read per daily run. At 1 call/day this is invisible relative to per-booking traffic.
+
+`bot.services.sheets.SheetsService` exposes:
+- `load_vip_sent() -> set[int]` — returns telegram IDs already notified.
+- `append_vip_sent(client_telegram_id: int) -> None` — writes a new row with `now().isoformat()` as `sent_at`.
+
+## 16.3 Candidate selection — pure helper
+
+`bot.handlers.vip.select_vip_candidates(completed, upcoming, already_sent) -> list[int]`:
+- `completed`: list of `Booking` with `status='completed'`
+- `upcoming`: list of `Booking` with `status='confirmed'`, `datetime_start.date()` in `[today, today+7d]`
+- `already_sent`: set of telegram IDs from `_vip_sent`
+
+Algorithm:
+1. `visits = Counter(b.client_telegram_id for b in completed)`
+2. `upcoming_ids = {b.client_telegram_id for b in upcoming}`
+3. Return `sorted({tid for tid in upcoming_ids if visits[tid] >= 5 and tid not in already_sent})`
+
+Pure (no I/O). Tested in `tests/test_vip.py`.
+
+## 16.4 VIP message template
+
+```
+⭐ {name}, вы наш VIP-клиент после 5 визитов! Промокод SUPERVIP на ваш следующий визит.
+```
+
+Russian only for v1 (consistent with reminder templates per OQ-2). `{name}` is `Booking.client_name` of the most recent completed visit for that client.
+
+## 16.5 Rate-limit hygiene
+
+`await asyncio.sleep(0.05)` between sends — keeps under Telegram's 30 msg/sec global cap when many candidates qualify on the same day.
+
+Per-send failures (Telegram 403 / blocked-by-user / network blip) log and continue to the next candidate; the failed candidate is NOT marked sent → next daily run retries.
+
+## 16.6 Manual setup (operator)
+
+Create the `_vip_sent` worksheet in the same Google Sheet:
+- Tab name: `_vip_sent` (leading underscore = "system" tab convention, like `_errors`).
+- Row 1 headers: `client_telegram_id`, `sent_at`.
+- Share permission: already covered by the service-account share on the spreadsheet.
+
+If the tab doesn't exist when the bot starts, `SheetsService.__init__` raises `WorksheetNotFound` at boot — loud failure, immediately fixable.
+
+## 16.7 Temporary admin command (Prompt 8 only)
+
+`/run_vip` calls `check_vip_promos()` directly from the admin handler — for manual smoke testing the candidate-selection + DM flow without waiting for 09:00. **Removed in Prompt 10** (final cleanup).
+
+## 16.8 Definition of Done
+
+- A client with 5 `completed` bookings + 1 upcoming `confirmed` booking + NOT in `_vip_sent` receives exactly one DM with promo code `SUPERVIP`, and their ID is appended to `_vip_sent`.
+- A client with the same shape but already in `_vip_sent` receives no DM (log line includes `"skipped K already-sent"`).
+- A client with 4 `completed` + upcoming → no DM.
+- A client with 5 `completed` + no upcoming in next 7 days → no DM.
+- Daily cron runs at 09:00 Europe/Kyiv; re-registration on every restart is idempotent (`ConflictPolicy.replace`).
+- `/run_vip` works for admins and is a no-op for non-admins.
 
 ---
 
@@ -1381,7 +1443,7 @@ To be filled during Prompt 10. README covers: value prop, GIF demo, stack, archi
 
 This section is maintained jointly. Claude Code adds questions encountered during planning or build that need operator input. The operator resolves them.
 
-**OQ-0 (seed).** Where does the VIP-already-notified guard live? Two candidates: (a) new column `vip_message_sent_at` on `bookings`, set once per client when the first VIP DM fires; (b) new sheet `_vip_sent` keyed by `client_telegram_id`. Option (a) is cheaper (one extra column, no extra worksheet) but conflates the booking row's lifecycle with the client's lifecycle. Option (b) is semantically cleaner. **Decision to be made during Prompt 8 and recorded in §16.**
+**OQ-0 [resolved in Prompt 8].** ~~Where does the VIP-already-notified guard live?~~ → **Decision:** new sheet `_vip_sent` (option b). Rationale: client-scoped state belongs in a client-scoped tab, not duplicated across booking rows. Full reasoning in §16.2.
 
 **OQ-1 (seed).** Calendar event title format. The owner's calendar shows: `{client_name} — {service_name}`? Or include phone? The latter exposes PII in any view the master shares. Recommendation: client_name + service_name only; phone in `description`. Confirm with operator during Prompt 4.
 
