@@ -17,7 +17,7 @@ from typing import Any
 
 from apscheduler import AsyncScheduler, ConflictPolicy
 from apscheduler.datastores.sqlalchemy import SQLAlchemyDataStore
-from apscheduler.serializers.cbor import CBORSerializer
+from apscheduler.serializers.pickle import PickleSerializer
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 _DB_URL = f"sqlite+aiosqlite:///{settings.scheduler_db_path.resolve().as_posix()}"
 
 _engine = create_async_engine(_DB_URL)
-_data_store = SQLAlchemyDataStore(_engine, serializer=CBORSerializer())
+_data_store = SQLAlchemyDataStore(_engine, serializer=PickleSerializer())
 scheduler: AsyncScheduler = AsyncScheduler(_data_store)
 
 

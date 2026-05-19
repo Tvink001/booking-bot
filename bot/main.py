@@ -20,6 +20,7 @@ from bot.config import settings
 from bot.handlers.admin import admin_router
 from bot.handlers.booking import booking_router
 from bot.handlers.my_bookings import my_bookings_router
+from bot.handlers.reminders import set_runtime as set_reminders_runtime
 from bot.handlers.start import start_router
 from bot.services.calendar import CalendarService
 from bot.services.scheduler import scheduler
@@ -41,30 +42,34 @@ def _build_dispatcher() -> Dispatcher:
     dp = Dispatcher(storage=MemoryStorage())
     # Workflow-data DI: handlers that declare `sheets: SheetsService` or
     # `calendar: CalendarService` parameters receive these singletons.
-    dp["sheets"] = SheetsService()
+    sheets = SheetsService()
+    dp["sheets"] = sheets
     dp["calendar"] = CalendarService()
     dp.include_router(start_router)
     dp.include_router(booking_router)
     dp.include_router(my_bookings_router)
     dp.include_router(admin_router)
+
+    async def _on_startup(bot: Bot) -> None:
+        # set_runtime BEFORE start_in_background — otherwise an
+        # immediately-due reminder could fire with _bot/_sheets None.
+        set_reminders_runtime(bot, sheets)
+        await scheduler.__aenter__()
+        await scheduler.start_in_background()
+        logger.info("APScheduler started; data store at %s", settings.scheduler_db_path)
+
+        if settings.mode == "webhook":
+            url = settings.webhook_base_url.rstrip("/") + WEBHOOK_PATH
+            await bot.set_webhook(
+                url=url,
+                secret_token=settings.webhook_secret.get_secret_value(),
+                drop_pending_updates=True,
+            )
+            logger.info("Webhook registered: %s", url)
+
     dp.startup.register(_on_startup)
     dp.shutdown.register(_on_shutdown)
     return dp
-
-
-async def _on_startup(bot: Bot) -> None:
-    await scheduler.__aenter__()
-    await scheduler.start_in_background()
-    logger.info("APScheduler started; data store at %s", settings.scheduler_db_path)
-
-    if settings.mode == "webhook":
-        url = settings.webhook_base_url.rstrip("/") + WEBHOOK_PATH
-        await bot.set_webhook(
-            url=url,
-            secret_token=settings.webhook_secret.get_secret_value(),
-            drop_pending_updates=True,
-        )
-        logger.info("Webhook registered: %s", url)
 
 
 async def _on_shutdown(bot: Bot) -> None:

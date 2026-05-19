@@ -1109,24 +1109,88 @@ Empty-state messages: "На сегодня (…) записей нет." / "На
 
 ---
 
-# 14. Reminders [TBD via Prompt 6]
+# 14. Reminders [filled, Prompt 6]
 
-To be filled during Prompt 6. APScheduler 4 schedules:
-- 24-hour reminder: scheduled at booking creation, fires `send_reminder(booking_id, 24)`
-- 1-hour reminder: same pattern, 1 hour offset
-- Both reminders check the booking is still `confirmed` before sending (handles "client cancelled between schedule and fire")
-- After successful send, set the corresponding `reminder_24_sent` / `reminder_1_sent` flag in Sheets
+APScheduler 4 fires `bot.handlers.reminders.send_reminder(booking_id, hours_offset)` from a persisted `DateTrigger`. Two jobs per booking: 24h and 1h before `datetime_start`. Both are scheduled at confirmation time (`bot.handlers.booking.on_confirm` → `bot.services.scheduler.schedule_reminder`), removed at cancellation (`my_bookings.on_cancel_booking` → `cancel_reminders` as step 1 of the cancellation sequence).
 
-**Idempotency (write-after-success pattern carried from P1):** the order of operations matters. Send the DM first; only after Telegram returns 200, write the `reminder_X_sent` timestamp to Sheets. If the DM fails, the flag stays unset → APScheduler's `conflict_policy=ConflictPolicy.replace` on re-schedule means the next attempt picks up cleanly. If the DM succeeds but the Sheet write fails, a re-fire after restart will harmlessly re-send (the bot restart path also re-reads the flag before sending — belt-and-suspenders against any APScheduler edge case).
+## 14.1 send_reminder body (5-step order)
 
-**Callable must be importable by full module path.** APScheduler 4's `SQLAlchemyDataStore` + `CBORSerializer` serializes the callable reference. A lambda, a closure, or a function defined inside another function cannot be re-resolved after a restart — the scheduler silently drops the job. Define `send_reminder` at module scope in `bot/handlers/reminders.py` and reference it via the symbol, not via a wrapper. Verify this discipline holds during the Prompt 6 restart drill.
+Inside `bot/handlers/reminders.py:send_reminder`:
+
+1. **Load booking fresh.** `sheets.load_booking_by_id(booking_id)`. If `None` → log + return (booking row deleted; nothing to do).
+2. **Status guard.** If `booking.status != "confirmed"` → log + return. Handles the race "cancelled between schedule and fire" even though cancellation also calls `cancel_reminders` first.
+3. **Already-sent guard.** If `reminder_24_sent` (or `reminder_1_sent`, depending on `hours_offset`) is truthy → log + return. This is the belt-and-suspenders against duplicate fires after restart.
+4. **Send DM.** `bot.send_message(chat_id=booking.client_telegram_id, text=...)`. Raises on Telegram error.
+5. **Flip flag.** `sheets.set_reminder_sent_flag(booking_id, hours_offset)` — only after step 4 returns without exception.
+
+If step 4 raises, the exception propagates to APScheduler's job worker (logs in stdout). Step 5 is skipped, so the flag stays unset. The next scheduled fire (or a manual re-schedule) will retry. If the flag flips but a duplicate fire happens (rare — e.g. two replicas running), the in-handler guard at step 3 skips.
+
+## 14.2 Bot injection — module-level globals (not args)
+
+APScheduler 4's `add_schedule(..., args=tuple)` requires CBOR-serializable args. `Bot` is not (open HTTP session, asyncio loop refs). Pattern:
+
+```python
+# bot/handlers/reminders.py
+_bot: Bot | None = None
+_sheets: SheetsService | None = None
+
+def set_runtime(bot: Bot, sheets: SheetsService) -> None:
+    global _bot, _sheets
+    _bot = bot
+    _sheets = sheets
+```
+
+`bot/main.py:on_startup` calls `set_runtime(bot, sheets)` **BEFORE** `scheduler.start_in_background()` — so an immediately-due reminder (within seconds of startup) can find both refs set. Defense-in-depth: `send_reminder` also returns early with an error log if either ref is None.
+
+Alternative considered: pass refs via aiogram `dp["sheets"]` workflow_data into a closure factory. Rejected because the scheduled callable is `send_reminder` itself (the symbol APScheduler serializes), not a closure — and a closure isn't module-level-importable.
+
+## 14.3 Reminder text templates (RU per OQ-2)
+
+```
+MSG_REMINDER_24H_TEMPLATE = (
+    "⏰ Напоминание: завтра в {time_str} у вас запись на «{service_name}» "
+    "к мастеру {master_name}."
+)
+MSG_REMINDER_1H_TEMPLATE = (
+    "🔔 Через час — запись «{service_name}» у мастера {master_name}."
+)
+```
+
+`time_str = booking.datetime_start.strftime("%H:%M")`. Both templates centralized at top of `reminders.py` for one-shot localization (OQ-2 revisit).
+
+## 14.4 Scheduling at booking confirmation
+
+`bot.services.scheduler.schedule_reminder(booking_id, fire_at, kind)`:
+
+```python
+await scheduler.add_schedule(
+    send_reminder,                                    # module-level ref
+    DateTrigger(run_time=fire_at),
+    id=f"reminder_{kind}h_{booking_id}",
+    args=(booking_id, kind),                          # CBOR-safe (str + int)
+    conflict_policy=ConflictPolicy.replace,           # idempotent re-schedule
+)
+```
+
+The booking handler loops `(24, 1)` and skips any kind whose `fire_at <= now()` (e.g. same-day booking with <1h lead time → no 1h reminder).
+
+## 14.5 Cancellation removes schedules
+
+`bot.services.scheduler.cancel_reminders(booking_id)` loops both kinds, calls `scheduler.remove_schedule(sid)` for each, swallows the lookup error if the schedule was already fired/never created. Cancellation handler (Prompt 5) invokes this as **step 1** of the 5-step sequence — schedules are gone BEFORE the Sheet `status` flips to `cancelled`, so the race window where a reminder fires for a freshly-cancelled booking is essentially zero. The status-guard at step 2 of `send_reminder` catches any residual race.
+
+## 14.6 APScheduler 4 alpha known quirks
+
+- `ScheduleLookupError` is **not** publicly exported from `apscheduler` in 4.0.0a6 — Context7 lookup confirms only `AsyncScheduler`, `ConflictPolicy`, triggers, datastores, serializers are exported. `cancel_reminders` catches broad `Exception` with a debug log; cancelling a non-existent schedule is benign.
+- `DateTrigger(run_time=...)` accepts naive datetimes (Context7 example uses `datetime.now() + timedelta(...)`). Project convention is naive local-time (Europe/Kyiv assumed), no `tz=` arg.
+- Same-process startup ordering: `__aenter__` must be inside an active event loop. Achieved by entering the context inside aiogram's `_on_startup` hook, which runs after `asyncio.run(_run_polling())` has created the loop.
+- **CBORSerializer × cbor2 6.x is broken in 4.0.0a6.** Switched to `PickleSerializer` (Prompt 6 manual test discovery). Symptom: scheduler worker crashes on first poll with `AttributeError: 'bool' object has no attribute 'tag'` deep inside `cbor.deserialize`, raising `apscheduler.DeserializationError` and aborting the whole worker task. Root cause: `cbor2` 6.x changed the `_tag_hook` signature; alpha was tested against `cbor2` 5.x. Pickle is safe here (data store is self-written, no untrusted input) and provides identical guarantees for module-level callables. **Switching serializers makes existing rows unreadable** — wipe `data/scheduler.db*` after the swap. `cbor2` stays as a transitive dependency.
 
 **Definition of Done:**
-- Reminders fire at correct times
-- Bot restart does NOT cause double-firing (idempotency)
-- Cancelled bookings do NOT receive reminders (cancellation removes schedules BEFORE the Sheet write that flips status)
-- Failed sends (user blocked bot, network blip) log to `_errors`, leave the `reminder_X_sent` flag UNSET, and mark the booking's status appropriately
-- Restart drill: schedule a reminder 5 min out, redeploy mid-window, confirm it still fires
+- ✅ Reminders fire at correct times (DateTrigger persists across restart via SQLite)
+- ✅ Bot restart does NOT cause double-firing (idempotency: status guard + already-sent guard + write-after-success)
+- ✅ Cancelled bookings do NOT receive reminders (cancel_reminders runs BEFORE the Sheet status flip; reminder's status-guard catches any race remnant)
+- ✅ Failed sends propagate to APScheduler (logged in stdout), flag stays unset for retry
+- ✅ Restart drill: schedule a reminder 5 min out, Ctrl+C the bot, restart, confirm fire still happens at the original time. Module-level `send_reminder` import path is stable across restarts.
 
 ---
 

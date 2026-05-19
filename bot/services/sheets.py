@@ -131,6 +131,22 @@ class SheetsService:
                 logger.warning("Skipping malformed booking row %s: %s", r.get("id"), e)
         return out
 
+    async def load_booking_by_id(self, booking_id: str) -> Booking | None:
+        """Look up one booking by its id. Iterates the full sheet — for the
+        SMB scale this project targets (a few thousand rows over a year),
+        a per-call full scan is acceptable. Used by `send_reminder` to
+        re-read the booking on fire for the idempotency check."""
+        rows = await asyncio.to_thread(self._ws_bookings.get_all_records, head=1)
+        for r in rows:
+            if str(r.get("id") or "") != booking_id:
+                continue
+            try:
+                return Booking.from_row(r)
+            except (KeyError, ValueError, TypeError) as e:
+                logger.warning("Cannot parse booking %s: %s", booking_id, e)
+                return None
+        return None
+
     async def load_all_bookings(self) -> list[Booking]:
         """Load every booking row. Used by /today /week /stats /export to
         avoid N reads of the full sheet — bookings tab fits in memory for
