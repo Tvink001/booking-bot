@@ -1,61 +1,57 @@
-# `secrets/` — куди класти Google Service Account JSON
+# `secrets/` — Google Service Account JSON
 
-Ця папка містить лише один файл: `credentials.json` — JSON-ключ Google
-сервіс-аккаунта, який бот використовує для доступу до Google Sheets і
-Google Calendar.
+This folder holds a single file: `credentials.json` — the Google service-account
+JSON the bot uses to talk to Google Sheets and Google Calendar.
 
-## Що сюди покласти
+## What goes here
 
-Один файл: **`secrets/credentials.json`**.
+One file: **`secrets/credentials.json`**.
 
-Це JSON, який Google Cloud Console згенерував і запропонував завантажити,
-коли ти створював ключ для сервіс-аккаунта (Service Accounts → Keys → Add Key
-→ Create new key → JSON). Зміст виглядає приблизно так:
+This is the JSON Google Cloud Console offers for download when you create a key
+for the service account (Service Accounts → Keys → Add Key → Create new key →
+JSON). Fields inside:
 
-JSON містить такі поля (значення замінено описом — у реальному файлі будуть конкретні значення від Google):
-
-| Поле | Що це |
+| Field | What it is |
 |---|---|
-| `type` | завжди `"service_account"` |
-| `project_id` | ID Google Cloud-проєкту, де створено аккаунт |
-| `private_key_id` | ID приватного ключа |
-| `private_key` | сам приватний ключ у PEM-форматі — це **секрет**, не показуй нікому |
-| `client_email` | email сервіс-аккаунта виду `<name>@<project>.iam.gserviceaccount.com` — саме цю адресу шарити з Sheet і Calendar |
-| `client_id` | числовий ID клієнта |
-| `auth_uri` / `token_uri` | стандартні OAuth2 endpoint`и Google |
+| `type` | always `"service_account"` |
+| `project_id` | the Google Cloud project the account belongs to |
+| `private_key_id` | id of the private key |
+| `private_key` | the private key in PEM — **this is the secret**, do not share |
+| `client_email` | service-account email, looks like `<name>@<project>.iam.gserviceaccount.com` — this is the address you share with Sheet and Calendar |
+| `client_id` | numeric client id |
+| `auth_uri` / `token_uri` | Google's standard OAuth2 endpoints |
 
-**Не редагуй цей файл.** Скопіюй як є з машини, де його завантажив, у цю
-папку, перейменуй у `credentials.json`, якщо назва інша.
+**Don't edit the file.** Copy it as-is from the machine you downloaded it on,
+rename to `credentials.json` if needed.
 
-## Що зробити з `client_email` із JSON
+## What to do with `client_email`
 
-Адреса виду `<щось>@<project>.iam.gserviceaccount.com` — це email сервіс-
-аккаунта. **Цю адресу треба видати як редактора (Editor):**
+The `<something>@<project>.iam.gserviceaccount.com` address is the service
+account's email. **You need to grant it Editor on:**
 
-1. У Google Sheets-таблиці бота — Share → додати цей email → роль Editor
-2. У Google Calendar кожного мастера — Settings → Share with specific people
-   → додати цей email → роль "Make changes to events"
+1. The bot's Google Sheet — Share → add the email → role: Editor
+2. Each master's Google Calendar — Settings → Share with specific people →
+   add the email → role: "Make changes to events"
 
-Без цього бот не зможе нічого ні писати, ні читати — отримаєш 403 Forbidden.
+Without this, the bot can neither read nor write — you'll get 403 Forbidden.
 
-## Чому файл не в Git
+## Why the file isn't in git
 
-`secrets/credentials.json` містить `private_key`, який = доступ до твоїх
-Google API. Якщо потрапить у публічний репо — Google автоматично відкличе
-ключ протягом кількох хвилин і завалить тебе попередженнями. `.gitignore`
-у корені виключає весь вміст `secrets/` крім цього README.
+`secrets/credentials.json` contains a `private_key` that = access to your
+Google APIs. If it lands in a public repo, Google auto-revokes the key within
+minutes and floods you with alerts. The root `.gitignore` excludes everything
+in `secrets/` except this README.
 
-## Як подається у код
+## How the code finds it
 
-`bot/config.py` через pydantic-settings читає змінну `GOOGLE_SERVICE_ACCOUNT_PATH`
-із `.env`. За замовчуванням вона дорівнює `./secrets/credentials.json`.
-`bot/services/sheets.py` і `bot/services/calendar.py` ініціалізують
-клієнти через `service_account.Credentials.from_service_account_file(path, scopes=[...])`.
+`bot/config.py` (pydantic-settings) reads `GOOGLE_SERVICE_ACCOUNT_PATH` from
+`.env`. The default is `./secrets/credentials.json`. `bot/services/sheets.py`
+and `bot/services/calendar.py` instantiate clients via
+`service_account.Credentials.from_service_account_file(path, scopes=[...])`.
 
-## На Railway
+## On Railway
 
-`credentials.json` НЕ копіюється у Docker-образ. Завантажуєш як Railway
-Secret File з mount-point `/app/secrets/credentials.json` (це шлях
-всередині контейнера). Прод-значення `GOOGLE_SERVICE_ACCOUNT_PATH` у Railway
-Variables виставляєш на `/app/secrets/credentials.json` — і код далі
-не помічає різниці між локалкою та продом.
+`credentials.json` is NOT baked into the Docker image. Upload it as a Railway
+Secret File with mount-point `/app/secrets/credentials.json` (the path inside
+the container). Set `GOOGLE_SERVICE_ACCOUNT_PATH` in Railway Variables to
+`/app/secrets/credentials.json` — and the code can't tell prod from local.

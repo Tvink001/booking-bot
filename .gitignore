@@ -1,34 +1,29 @@
 # =============================================================================
 # Booking Bot — .gitignore
-# Захищає секрети та локальні артефакти. Перед першим `git add .` переконайся,
-# що ці шаблони працюють: `git status` НЕ повинен показувати .env, credentials.json,
-# .mcp.json або data/scheduler.db.
+# Guards secrets and local artefacts. After a fresh clone, `git status` should
+# not list .env, secrets/credentials.json, or data/scheduler.db.
 # =============================================================================
 
-# --- Секрети — НІКОЛИ не комітити ----------------------------------------
+# --- Secrets — NEVER commit ---------------------------------------------
 .env
 .env.local
 .env.*.local
 .env.production
 .env.development
 
-# Google service account JSON та будь-які інші ключі у secrets/
+# Google service account JSON and any other keys under secrets/
 secrets/*
 !secrets/README.md
 
-# Claude Code MCP-конфіг містить операторо-специфічний шлях до cmd-шима
-# та може містити секрети (див. learnings.md, project_specs.md §4.1)
-.mcp.json
-
-# --- Runtime-дані (persistent volume на Railway) -------------------------
+# --- Runtime data (Railway persistent volume) ---------------------------
 data/*
 !data/.gitkeep
 
-# --- Логи ----------------------------------------------------------------
+# --- Logs ---------------------------------------------------------------
 *.log
 logs/
 
-# --- Python --------------------------------------------------------------
+# --- Python -------------------------------------------------------------
 __pycache__/
 *.py[cod]
 *$py.class
@@ -50,7 +45,7 @@ pip-delete-this-directory.txt
 .coverage.*
 htmlcov/
 
-# --- IDE / редактори -----------------------------------------------------
+# --- IDE / editors ------------------------------------------------------
 .idea/
 .vscode/
 *.swp
@@ -58,11 +53,7 @@ htmlcov/
 *~
 .DS_Store
 
-# --- OS-сміття -----------------------------------------------------------
+# --- OS junk ------------------------------------------------------------
 Thumbs.db
 desktop.ini
 $RECYCLE.BIN/
-
-# --- Тимчасові артефакти Claude / агентів --------------------------------
-.claude/cache/
-.claude/
