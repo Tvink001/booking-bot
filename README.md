@@ -1,8 +1,6 @@
 # Booking Bot
 > A Telegram bot that replaces the booking-manager role for small salons, barbershops, and studios. Ten taps from `/start` to a confirmed appointment with calendar event, owner notification, and reminders.
 
-**Live demo:** [LIVE_DEMO_URL]
-
 ![Booking flow demo](docs/screenshots/demo.gif)
 
 ## Overview
