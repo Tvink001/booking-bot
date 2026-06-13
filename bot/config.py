@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     web_port: int = 8080
 
     # Scheduler
+    # If `scheduler_db_url` is set, it takes precedence — used for production
+    # (Postgres via asyncpg). Local dev leaves it unset and falls back to a
+    # SQLite file at `scheduler_db_path`. URL form:
+    #   postgresql+asyncpg://user:pass@host:port/db
+    scheduler_db_url: SecretStr | None = None
     scheduler_db_path: Path = Path("./data/scheduler.db")
     scheduler_timezone: str = "Europe/Kyiv"
 

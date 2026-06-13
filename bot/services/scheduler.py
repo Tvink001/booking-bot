@@ -27,9 +27,13 @@ from bot.handlers.reminders import send_reminder
 
 logger = logging.getLogger(__name__)
 
-# Absolute POSIX path for clarity and to avoid Windows backslash quirks
-# in the SQLAlchemy URL parser.
-_DB_URL = f"sqlite+aiosqlite:///{settings.scheduler_db_path.resolve().as_posix()}"
+# Prefer an explicit DB URL (used for managed Postgres on Koyeb/Neon);
+# fall back to a local SQLite file for dev. SQLite URL is built from an
+# absolute POSIX path to dodge Windows backslash quirks in SQLAlchemy.
+if settings.scheduler_db_url is not None:
+    _DB_URL = settings.scheduler_db_url.get_secret_value()
+else:
+    _DB_URL = f"sqlite+aiosqlite:///{settings.scheduler_db_path.resolve().as_posix()}"
 
 _engine = create_async_engine(_DB_URL)
 _data_store = SQLAlchemyDataStore(_engine, serializer=PickleSerializer())
