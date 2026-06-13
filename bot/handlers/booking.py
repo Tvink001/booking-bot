@@ -51,51 +51,51 @@ booking_router = Router()
 # User-facing strings (Russian, see OQ-2)
 # ============================================================================
 
-MSG_PICK_SERVICE = "Выберите услугу:"
-MSG_PICK_MASTER = "Выберите мастера:"
-MSG_PICK_DATE = "Выберите дату:"
-MSG_PICK_SLOT = "Выберите время:"
-MSG_ENTER_NAME = "Как вас зовут? Напишите имя текстом или запишите голосом."
-MSG_ENTER_PHONE = "Оставьте номер телефона.\nМожно вручную или через кнопку «Поделиться контактом»."
-MSG_VOICE_PROMPT = "🎤 Запишите голосовое сообщение со своим именем."
-MSG_VOICE_TOO_LARGE = "Файл слишком большой. Запишите короче или введите имя текстом."
-MSG_VOICE_TRANSCRIBE_FAILED = "Не удалось распознать голос. Введите имя текстом."
-MSG_VOICE_TRANSCRIBE_EMPTY = "Не удалось распознать чисто. Попробуйте ещё раз или введите текстом."
-MSG_VOICE_CONFIRM_TEMPLATE = "Распознано: {name}\n\nПодтвердить или отредактировать?"
-MSG_VOICE_NOT_FOR_PHONE = "Для номера используйте цифры или кнопку «Поделиться контактом»."
-MSG_VOICE_ONLY_FOR_NAME = "Голосовой ввод — только для имени."
-MSG_NO_MASTERS = "Нет доступных мастеров для этой услуги."
-MSG_NAME_TOO_SHORT = "Имя слишком короткое. Введите ещё раз."
+MSG_PICK_SERVICE = "Choose a service:"
+MSG_PICK_MASTER = "Choose a specialist:"
+MSG_PICK_DATE = "Choose a date:"
+MSG_PICK_SLOT = "Choose a time:"
+MSG_ENTER_NAME = "What's your name? Type it or record a voice message."
+MSG_ENTER_PHONE = "Leave your phone number.\nType it or use the «Share contact» button."
+MSG_VOICE_PROMPT = "🎤 Record a voice message with your name."
+MSG_VOICE_TOO_LARGE = "File too large. Record a shorter one or type your name."
+MSG_VOICE_TRANSCRIBE_FAILED = "Couldn't recognize the voice. Type your name instead."
+MSG_VOICE_TRANSCRIBE_EMPTY = "Couldn't recognize it clearly. Try again or type it."
+MSG_VOICE_CONFIRM_TEMPLATE = "Recognized: {name}\n\nConfirm or edit?"
+MSG_VOICE_NOT_FOR_PHONE = "For the number, use digits or the «Share contact» button."
+MSG_VOICE_ONLY_FOR_NAME = "Voice input is for the name only."
+MSG_NO_MASTERS = "No specialists available for this service."
+MSG_NAME_TOO_SHORT = "Name too short. Please enter it again."
 MSG_INVALID_PHONE = (
-    "Не получилось распознать номер. Попробуйте ещё раз "
-    "или нажмите кнопку «Поделиться контактом»."
+    "Couldn't recognize the number. Try again "
+    "or tap the «Share contact» button."
 )
-MSG_DAY_UNAVAILABLE = "Этот день недоступен"
-MSG_SLOT_TAKEN = "Этот слот только что заняли, выберите другой:"
-MSG_GENERIC_ERROR = "Что-то пошло не так. Попробуйте ещё раз позже."
-MSG_CANCELLED = "Запись отменена."
-MSG_MAIN_MENU = "Главное меню:"
+MSG_DAY_UNAVAILABLE = "This day is unavailable"
+MSG_SLOT_TAKEN = "That slot was just taken, choose another:"
+MSG_GENERIC_ERROR = "Something went wrong. Please try again later."
+MSG_CANCELLED = "Booking cancelled."
+MSG_MAIN_MENU = "Main menu:"
 MSG_CALENDAR_PENDING_NOTE = "\n\n⚠ Calendar event will be created on the next sync attempt."
 
 MSG_CONFIRM_TEMPLATE = (
-    "Подтвердите запись:\n\n"
+    "Confirm your booking:\n\n"
     "📋 {service_name}\n"
     "💇 {master_name}\n"
     "📅 {date_str}\n"
     "⏰ {time_str}\n"
     "👤 {client_name}\n"
     "📱 {client_phone}\n\n"
-    "Всё верно?"
+    "All correct?"
 )
 MSG_SUCCESS_TEMPLATE = (
-    "✅ Запись создана!\n\n"
+    "✅ Booking created!\n\n"
     "📋 {service_name}\n"
     "💇 {master_name}\n"
-    "📅 {date_str} в {time_str}\n\n"
-    "Мы отправим напоминания за 24 часа и за 1 час до визита."
+    "📅 {date_str} at {time_str}\n\n"
+    "We'll send reminders 24 hours and 1 hour before your visit."
 )
 MSG_OWNER_NEW_BOOKING_TEMPLATE = (
-    "🆕 Новая запись:\n\n"
+    "🆕 New booking:\n\n"
     "👤 {client_name}\n"
     "📱 {client_phone}\n"
     "📋 {service_name}\n"
@@ -180,7 +180,7 @@ async def _safe_edit(
 def _voice_button_kb() -> InlineKeyboardMarkup:
     """Single-button inline keyboard offering voice input on the name prompt."""
     kb = InlineKeyboardBuilder()
-    kb.button(text="🎤 Голосом", callback_data=NavCB(action="voice_input").pack())
+    kb.button(text="🎤 By voice", callback_data=NavCB(action="voice_input").pack())
     return kb.as_markup()
 
 
@@ -337,7 +337,7 @@ async def on_service_pick(
 ) -> None:
     service = await _service_by_id(sheets, callback_data.service_id)
     if service is None:
-        await query.answer("Услуга не найдена", show_alert=True)
+        await query.answer("Service not found", show_alert=True)
         return
     await state.update_data(service_id=service.id)
 
@@ -373,7 +373,7 @@ async def on_master_pick(
 ) -> None:
     master = await _master_by_id(sheets, callback_data.master_id)
     if master is None:
-        await query.answer("Мастер не найден", show_alert=True)
+        await query.answer("Specialist not found", show_alert=True)
         return
     await state.update_data(master_id=master.id)
     await state.set_state(Booking.choosing_date)
@@ -454,7 +454,7 @@ async def on_contact_text(message: Message, state: FSMContext, sheets: SheetsSer
         await message.answer(MSG_INVALID_PHONE)
         return
     await state.update_data(client_phone=phone)
-    await message.answer("Принято.", reply_markup=main_menu())
+    await message.answer("Got it.", reply_markup=main_menu())
     await _show_confirmation(message, state, sheets)
 
 
@@ -469,12 +469,12 @@ async def on_contact_share(message: Message, state: FSMContext, sheets: SheetsSe
     normalized = normalize_phone(raw_phone) or raw_phone
 
     if "client_name" not in data:
-        fallback_name = (contact.first_name or "Клиент").strip()
+        fallback_name = (contact.first_name or "Client").strip()
         await state.update_data(client_name=fallback_name, client_phone=normalized)
     else:
         await state.update_data(client_phone=normalized)
 
-    await message.answer("Принято.", reply_markup=main_menu())
+    await message.answer("Got it.", reply_markup=main_menu())
     await _show_confirmation(message, state, sheets)
 
 
@@ -548,8 +548,8 @@ async def on_contact_voice(
     # truncate longer names if we tried to round-trip via callback payload.
     await state.update_data(pending_voice_name=name)
     kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Подтвердить", callback_data=NavCB(action="voice_confirm").pack())
-    kb.button(text="✏️ Редактировать", callback_data=NavCB(action="voice_edit").pack())
+    kb.button(text="✅ Confirm", callback_data=NavCB(action="voice_confirm").pack())
+    kb.button(text="✏️ Edit", callback_data=NavCB(action="voice_edit").pack())
     kb.adjust(2)
     await message.answer(
         MSG_VOICE_CONFIRM_TEMPLATE.format(name=name),
@@ -571,7 +571,7 @@ async def on_voice_confirm(query: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(client_name=name, pending_voice_name=None)
     if isinstance(query.message, Message):
         try:
-            await query.message.edit_text(f"Имя: {name}")
+            await query.message.edit_text(f"Name: {name}")
         except Exception:
             logger.exception("voice_confirm edit_text failed")
         await query.message.answer(MSG_ENTER_PHONE, reply_markup=share_contact())

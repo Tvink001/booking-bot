@@ -39,8 +39,8 @@ def _chunked(items: list[datetime], size: int) -> Iterable[list[datetime]]:
 
 def _nav_row() -> list[InlineKeyboardButton]:
     return [
-        InlineKeyboardButton(text="← Назад", callback_data=NavCB(action="back").pack()),
-        InlineKeyboardButton(text="✖ Скасувати", callback_data=NavCB(action="cancel").pack()),
+        InlineKeyboardButton(text="← Back", callback_data=NavCB(action="back").pack()),
+        InlineKeyboardButton(text="✖ Cancel", callback_data=NavCB(action="cancel").pack()),
     ]
 
 
@@ -49,10 +49,10 @@ def build_service_keyboard(services: list[Service]) -> InlineKeyboardMarkup:
     for s in services:
         if not s.is_active:
             continue
-        label = f"{s.name} · {s.duration_min} хв · {s.price} грн"
+        label = f"{s.name} · {s.duration_min} min · {s.price} UAH"
         kb.button(text=label, callback_data=ServiceCB(service_id=s.id))
     kb.adjust(1)
-    kb.row(InlineKeyboardButton(text="✖ Скасувати", callback_data=NavCB(action="cancel").pack()))
+    kb.row(InlineKeyboardButton(text="✖ Cancel", callback_data=NavCB(action="cancel").pack()))
     return kb.as_markup()
 
 
@@ -112,11 +112,11 @@ def build_slot_keyboard(slots: list[datetime]) -> InlineKeyboardMarkup:
     if not slots:
         kb.row(
             InlineKeyboardButton(
-                text="На цю дату вільних слотів немає",
+                text="No free slots for this date",
                 callback_data=NavCB(action="noop_empty").pack(),
             )
         )
-        kb.row(InlineKeyboardButton(text="← Інша дата", callback_data=NavCB(action="back").pack()))
+        kb.row(InlineKeyboardButton(text="← Another date", callback_data=NavCB(action="back").pack()))
         return kb.as_markup()
 
     morning = sorted([s for s in slots if s.hour < 12])
@@ -125,7 +125,7 @@ def build_slot_keyboard(slots: list[datetime]) -> InlineKeyboardMarkup:
     if morning:
         kb.row(
             InlineKeyboardButton(
-                text="—— До обіду ——",
+                text="—— Morning ——",
                 callback_data=NavCB(action="noop_header").pack(),
             )
         )
@@ -143,7 +143,7 @@ def build_slot_keyboard(slots: list[datetime]) -> InlineKeyboardMarkup:
     if afternoon:
         kb.row(
             InlineKeyboardButton(
-                text="—— Після обіду ——",
+                text="—— Afternoon ——",
                 callback_data=NavCB(action="noop_header").pack(),
             )
         )
@@ -164,15 +164,15 @@ def build_slot_keyboard(slots: list[datetime]) -> InlineKeyboardMarkup:
 
 def build_confirm_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Так, підтвердити", callback_data=NavCB(action="confirm"))
-    kb.button(text="✖ Скасувати", callback_data=NavCB(action="cancel"))
+    kb.button(text="✅ Yes, confirm", callback_data=NavCB(action="confirm"))
+    kb.button(text="✖ Cancel", callback_data=NavCB(action="cancel"))
     kb.adjust(2)
     return kb.as_markup()
 
 
 def build_back_button() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="← Назад", callback_data=NavCB(action="back"))
+    kb.button(text="← Back", callback_data=NavCB(action="back"))
     return kb.as_markup()
 
 
@@ -182,7 +182,7 @@ def build_user_booking_cancel_keyboard(booking_id: str) -> InlineKeyboardMarkup:
     callback lives in `bot/handlers/my_bookings.py` (Prompt 5)."""
     kb = InlineKeyboardBuilder()
     kb.button(
-        text="✖ Скасувати запис",
+        text="✖ Cancel booking",
         callback_data=BookingActionCB(booking_id=booking_id, action="cancel"),
     )
     return kb.as_markup()

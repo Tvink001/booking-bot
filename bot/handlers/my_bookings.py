@@ -32,21 +32,21 @@ logger = logging.getLogger(__name__)
 my_bookings_router = Router()
 
 
-MSG_NO_BOOKINGS = "У вас пока нет предстоящих записей."
-MSG_BOOKING_NOT_FOUND = "Запись не найдена"
-MSG_ALREADY_CANCELLED = "Запись уже отменена или завершена"
-MSG_CANCELLED_USER = "✅ Запись отменена."
-MSG_CANCEL_GENERIC_ERROR = "Не удалось отменить запись. Попробуйте позже."
+MSG_NO_BOOKINGS = "You have no upcoming bookings."
+MSG_BOOKING_NOT_FOUND = "Booking not found"
+MSG_ALREADY_CANCELLED = "Booking is already cancelled or completed"
+MSG_CANCELLED_USER = "✅ Booking cancelled."
+MSG_CANCEL_GENERIC_ERROR = "Couldn't cancel the booking. Please try later."
 MSG_MASTER_CANCELLED_TEMPLATE = (
-    "❌ Запись отменена клиентом:\n"
+    "❌ Booking cancelled by client:\n"
     "👤 {client_name}\n"
     "📅 {date_str} {time_str}\n"
     "🆔 {booking_id}"
 )
-MSG_BOOKING_ROW_TEMPLATE = "📅 {date_str} в {time_str}\n💇 {master_name}\n📋 {service_name}"
+MSG_BOOKING_ROW_TEMPLATE = "📅 {date_str} at {time_str}\n💇 {master_name}\n📋 {service_name}"
 
 
-@my_bookings_router.message(F.text == "📋 Мої записи")
+@my_bookings_router.message(F.text == "📋 My bookings")
 async def cmd_my_bookings(message: Message, state: FSMContext, sheets: SheetsService) -> None:
     if message.from_user is None:
         return
@@ -84,7 +84,7 @@ async def cmd_my_bookings(message: Message, state: FSMContext, sheets: SheetsSer
         )
         kb = InlineKeyboardBuilder()
         kb.button(
-            text="✖ Отменить",
+            text="✖ Cancel",
             callback_data=BookingActionCB(booking_id=booking.id, action="cancel"),
         )
         await message.answer(text, reply_markup=kb.as_markup())

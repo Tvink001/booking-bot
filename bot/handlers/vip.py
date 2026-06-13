@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 VIP_MESSAGE_TEMPLATE = (
-    "⭐ {name}, вы наш VIP-клиент после 5 визитов! " "Промокод SUPERVIP на ваш следующий визит."
+    "⭐ {name}, you're our VIP after 5 visits! " "Promo code SUPERVIP for your next visit."
 )
 
 VIP_VISIT_THRESHOLD = 5
@@ -82,7 +82,7 @@ def _client_name_for(completed: list[Booking], tid: int) -> str:
     """
     matches = [b for b in completed if b.client_telegram_id == tid]
     if not matches:
-        return "клиент"
+        return "client"
     latest = max(matches, key=lambda b: b.datetime_start)
     return latest.client_name or "клиент"
 

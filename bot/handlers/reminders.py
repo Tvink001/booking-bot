@@ -31,10 +31,10 @@ logger = logging.getLogger(__name__)
 
 
 MSG_REMINDER_24H_TEMPLATE = (
-    "⏰ Напоминание: завтра в {time_str} у вас запись на «{service_name}» "
-    "к мастеру {master_name}."
+    "⏰ Reminder: tomorrow at {time_str} you have «{service_name}» "
+    "with {master_name}."
 )
-MSG_REMINDER_1H_TEMPLATE = "🔔 Через час — запись «{service_name}» у мастера {master_name}."
+MSG_REMINDER_1H_TEMPLATE = "🔔 In an hour — «{service_name}» with {master_name}."
 
 # Module-level runtime refs, set once at startup. See module docstring.
 _bot: Bot | None = None

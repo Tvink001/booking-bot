@@ -28,9 +28,9 @@ admin_router = Router()
 
 _ADMIN_COMMANDS = ["today", "week", "stats", "export"]
 
-MSG_NO_RIGHTS = "У вас нет прав на эту команду."
-MSG_TODAY_NONE = "На сегодня ({date_str}) записей нет."
-MSG_WEEK_NONE = "На ближайшие 7 дней записей нет."
+MSG_NO_RIGHTS = "You don't have permission for this command."
+MSG_TODAY_NONE = "No bookings for today ({date_str})."
+MSG_WEEK_NONE = "No bookings for the next 7 days."
 
 
 class AdminFilter(Filter):
@@ -105,7 +105,7 @@ async def _do_today(message: Message, sheets: SheetsService) -> None:
 
     for master_id, bookings in _group_by_master(todays).items():
         master_name = _name_of(masters, master_id)
-        lines = [f"📅 {master_name} — сегодня ({today.strftime('%d.%m.%Y')}):"]
+        lines = [f"📅 {master_name} — today ({today.strftime('%d.%m.%Y')}):"]
         for b in sorted(bookings, key=lambda x: x.datetime_start):
             lines.append(_booking_line(b, services))
         await message.answer("\n".join(lines))
@@ -127,7 +127,7 @@ async def _do_week(message: Message, sheets: SheetsService) -> None:
 
     for master_id, bookings in _group_by_master(week_bookings).items():
         master_name = _name_of(masters, master_id)
-        lines = [f"📅 {master_name} — ближайшие 7 дней:"]
+        lines = [f"📅 {master_name} — next 7 days:"]
         for b in sorted(bookings, key=lambda x: x.datetime_start):
             lines.append(
                 f"• {b.datetime_start.strftime('%d.%m %H:%M')} — "
@@ -152,12 +152,12 @@ async def _do_stats(message: Message, sheets: SheetsService) -> None:
         counts[b.status] += 1
 
     text = (
-        f"📊 Статистика за {month_start.strftime('%m.%Y')}\n\n"
-        f"• Подтверждённых: {counts.get('confirmed', 0)}\n"
-        f"• Отменённых: {counts.get('cancelled', 0)}\n"
-        f"• Завершённых: {counts.get('completed', 0)}\n"
-        f"• Не пришли: {counts.get('no_show', 0)}\n\n"
-        f"Всего: {len(in_month)}"
+        f"📊 Stats for {month_start.strftime('%m.%Y')}\n\n"
+        f"• Confirmed: {counts.get('confirmed', 0)}\n"
+        f"• Cancelled: {counts.get('cancelled', 0)}\n"
+        f"• Completed: {counts.get('completed', 0)}\n"
+        f"• No-shows: {counts.get('no_show', 0)}\n\n"
+        f"Total: {len(in_month)}"
     )
     await message.answer(text)
 
@@ -169,7 +169,7 @@ async def _do_export(message: Message, bot: Bot, sheets: SheetsService, *, all_t
         scope_bookings = list(all_b)
         period_label = "all-time"
         filename = "bookings-all.csv"
-        caption = f"Экспорт всех записей ({len(scope_bookings)})"
+        caption = f"All bookings export ({len(scope_bookings)})"
     else:
         now = datetime.now()
         month_start = date(now.year, now.month, 1)
@@ -180,7 +180,7 @@ async def _do_export(message: Message, bot: Bot, sheets: SheetsService, *, all_t
         scope_bookings = [b for b in all_b if month_start <= b.datetime_start.date() < month_end]
         period_label = month_start.strftime("%Y-%m")
         filename = f"bookings-{period_label}.csv"
-        caption = f"Экспорт за {month_start.strftime('%m.%Y')} ({len(scope_bookings)})"
+        caption = f"Export for {month_start.strftime('%m.%Y')} ({len(scope_bookings)})"
 
     scope_bookings.sort(key=lambda b: b.datetime_start)
     buf = io.StringIO()
@@ -225,7 +225,7 @@ async def _do_export(message: Message, bot: Bot, sheets: SheetsService, *, all_t
 
     if not all_time:
         kb = InlineKeyboardBuilder()
-        kb.button(text="📦 Все записи", callback_data=NavCB(action="export_all"))
+        kb.button(text="📦 All bookings", callback_data=NavCB(action="export_all"))
         markup = kb.as_markup()
     else:
         markup = None
