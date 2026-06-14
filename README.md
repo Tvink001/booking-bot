@@ -5,13 +5,13 @@
 
 ## Overview
 
-Small business owners (one to five-person teams) lose two to five hours a week on appointment scheduling: DMs at 11 PM, "what time was I free again?", forgotten cancellations, ghosting. Hiring a booking manager is overkill and a web form misses the "open on the phone you already have" reality. They already live inside Telegram. This bot turns that into a real booking system in under a minute per appointment: client picks a service, master, date, and slot; bot writes the booking to a shared Google Sheet, creates a Calendar event for the master, schedules 24-hour and 1-hour reminders that survive restarts, and DMs the owner.
+Small business owners (one to five-person teams) lose two to five hours a week on appointment scheduling: DMs at 11 PM, "what time was I free again?", forgotten cancellations, ghosting. Hiring a booking manager is overkill and a web form misses the "open on the phone you already have" reality. They already live inside Telegram. This bot turns that into a real booking system in under a minute per appointment: client picks a service, master, date, and slot; bot writes the booking to a shared Google Sheet, creates a Calendar event for the master, schedules 24-hour and 1-hour reminders that survive restarts, and notifies the owner's chat.
 
 ## Key Features
 
 - **Ten-tap booking flow** — `/start` → service → master → date → free slot → voice or text name → contact share → confirm → done. Six-state FSM keeps the conversation reliable across timeouts and out-of-order replies.
 - **Two-way Google Calendar sync.** When a master manually blocks time in their personal Calendar ("Lunch 12–13"), those slots disappear from the bot's pickers within ~60 seconds. No webhook plumbing — a freebusy query with a one-minute in-memory cache.
-- **Voice name input via Groq Whisper Large v3 Turbo.** Inline "🎤 Голосом" button on the name prompt → user speaks → bot transcribes for free and asks for a confirmation. Text fallback whenever Groq is down or the key is rejected.
+- **Voice name input via Groq Whisper Large v3 Turbo.** Inline "🎤 By voice" button on the name prompt → user speaks → bot transcribes for free and asks for a confirmation. Text fallback whenever Groq is down or the key is rejected.
 - **Automatic VIP detection.** A daily cron at 09:00 Kyiv finds clients with ≥5 completed visits and at least one upcoming booking, and sends a one-time promo DM. Idempotent via a separate `_vip_sent` sheet so the same person never gets the message twice.
 - **Sheets-as-CRM.** The owner edits bookings in a Google Sheet they already know. No admin UI to learn or maintain.
 - **Reminders that survive restarts.** APScheduler 4 with a persistent SQLite jobstore + Pickle serializer for the actual function references — every scheduled reminder is still there after a redeploy.
